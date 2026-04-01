@@ -1,5 +1,7 @@
 # telegram-zh-Hant-CN
 
+**Apply the language pack in Telegram:** [t.me/setlanguage/chinese-traditional-mainland](https://t.me/setlanguage/chinese-traditional-mainland)
+
 Bash pipeline for converting Telegram's Simplified Chinese (zh-Hans) translation files into **Traditional Chinese with PRC-standard glyphs** (zh-Hant-CN).
 
 ## What it does
