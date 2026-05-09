@@ -117,8 +117,8 @@ convert_s2t() {
     local seg_dir
     seg_dir=$(mktemp -d)
     python3 "$JIEBA_SCRIPT" "$LABELLED_DIR" "$seg_dir" \
-        --dict "$JIEBA_DIR/dict_ancient_chinese.txt" \
-        --userdict "$JIEBA_DIR/userdict.txt"
+        --dict "$JIEBA_DIR/jieba.dict.ancient.chinese.utf8" \
+        --userdict "$JIEBA_DIR/user.dict.utf8"
     for entry in "${PLATFORMS[@]}"; do
         IFS='|' read -r name url filename <<< "$entry"
         local src="$seg_dir/$filename"
@@ -140,8 +140,8 @@ convert_t2gov() {
     local seg_dir
     seg_dir=$(mktemp -d)
     python3 "$JIEBA_SCRIPT" "$S2T_DIR" "$seg_dir" \
-        --dict "$JIEBA_DIR/dict_ancient_chinese_traditional.txt" \
-        --userdict "$JIEBA_DIR/userdict_traditional.txt"
+        --dict "$JIEBA_DIR/jieba.dict.ancient.chinese.traditional.utf8" \
+        --userdict "$JIEBA_DIR/user.dict.traditional.utf8"
     for entry in "${PLATFORMS[@]}"; do
         IFS='|' read -r name url filename <<< "$entry"
         local src="$seg_dir/$filename"
