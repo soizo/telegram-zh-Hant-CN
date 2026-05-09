@@ -22,6 +22,7 @@ S2T_DIR="$SCRIPT_DIR/03-s2t-standard-Hant"
 OUTPUT_DIR="$SCRIPT_DIR/04-output-zh-Hant-CN"
 T2GOV_REPO="https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards.git"
 T2GOV_DIR="$SCRIPT_DIR/.opencc-t2gov"
+SED_DIR="$SCRIPT_DIR/sed"
 FROM_STEP=1
 
 # platform|url|filename
@@ -48,6 +49,9 @@ check_deps() {
         echo "  brew install opencc curl git" >&2
         exit 1
     fi
+    for n in 02 03 04 05; do
+        [ -f "$SED_DIR/$n.sed" ] || { echo "FATAL: sed rules file not found: $SED_DIR/$n.sed" >&2; exit 1; }
+    done
 }
 
 # -- step 0: prepare t2gov config ---------------------------------------------
@@ -63,16 +67,10 @@ setup_t2gov() {
 
 # -- label-replacement (on simplified source) ---------------------------------
 # Done BEFORE s2t so that OpenCC converts our replacement text to traditional.
+# Rules live in sed/02.sed.
 label_one() {
     local src="$1" dst="$2"
-    sed \
-        -e 's/简体中文/繁体中文(大陆)/g' \
-        -e 's/中文(简体)/繁体中文(大陆)/g' \
-        -e 's/Chinese (Simplified)/Traditional Chinese (Mainland)/g' \
-        -e 's/Chinese(Simplified)/Traditional Chinese (Mainland)/g' \
-        -e 's/zh_hans/zh_hant_cn/g' \
-        -e 's/zh-hans/zh-Hant-CN/g' \
-        "$src" > "$dst"
+    sed -f "$SED_DIR/02.sed" "$src" > "$dst"
 }
 
 # -- steps 1+2: download + label-replace, pipelined per platform ---------------
@@ -143,6 +141,7 @@ convert_s2t() {
         local dst="$S2T_DIR/$filename"
         [ -f "$src" ] || { printf "  %-12s skipped\n" "$name"; continue; }
         opencc -c s2t -i "$src" -o "$dst"
+        sed -i '' -f "$SED_DIR/03.sed" "$dst"
         printf "  %-12s done\n" "$name"
     done
 }
@@ -160,6 +159,7 @@ convert_t2gov() {
         local dst="$OUTPUT_DIR/$filename"
         [ -f "$src" ] || { printf "  %-12s skipped\n" "$name"; continue; }
         opencc -c "$cfg" -i "$src" -o "$dst"
+        sed -i '' -f "$SED_DIR/04.sed" "$dst"
         printf "  %-12s done\n" "$name"
     done
 }
@@ -172,9 +172,9 @@ usage: $0 [--from N] [--local]
   --from N    start from step N (1-5), reusing prior outputs on disk:
                 1 = download zh-Hans sources + label-replace (default)
                 2 = label-replace only (sources must exist in 01-source-zh-Hans/)
-                3 = OpenCC s2t (input: 02-labels-replaced/)
-                4 = OpenCC t2gov (input: 03-s2t-standard-Hant/)
-                5 = general polish (in-place on 04-output-zh-Hant-CN/)
+                3 = OpenCC s2t + sed/03.sed (input: 02-labels-replaced/)
+                4 = OpenCC t2gov + sed/04.sed (input: 03-s2t-standard-Hant/)
+                5 = sed/05.sed general polish (in-place on 04-output-zh-Hant-CN/)
   --local     alias for --from 2 (skip download)
   -h, --help  show this help
 EOF
@@ -214,14 +214,7 @@ batch_fixes() {
         IFS='|' read -r name url filename <<< "$entry"
         local f="$OUTPUT_DIR/$filename"
         [ -f "$f" ] || continue
-        sed -i '' \
-            -e 's/（/(/g' \
-            -e 's/）/)/g' \
-            -e $'s/\xe2\x80\x9c/\xe3\x80\x8c/g' \
-            -e $'s/\xe2\x80\x9d/\xe3\x80\x8d/g' \
-            -e $'s/\xe2\x80\x98/\xe3\x80\x8e/g' \
-            -e $'s/\xe2\x80\x99/\xe3\x80\x8f/g' \
-            "$f"
+        sed -i '' -f "$SED_DIR/05.sed" "$f"
         printf "  %-12s done\n" "$name"
     done
 }
