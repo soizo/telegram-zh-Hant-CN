@@ -127,12 +127,6 @@ download_and_label_parallel() {
 }
 
 # Used in --local mode only (no downloads to overlap with).
-# -- step 2: replace language labels (on simplified source) --------------------
-# Done BEFORE s2t so that OpenCC converts our replacement text to traditional.
-#   简体中文             -> 繁体中文(大陆)     (s2t will yield 繁體中文(大陸))
-#   Chinese (Simplified) -> Traditional Chinese (Mainland)
-#   zh_hans              -> zh_hant_cn       (Telegram underscore convention)
-#   zh-hans              -> zh-Hant-CN       (BCP 47 canonical form)
 replace_labels() {
     mkdir -p "$LABELLED_DIR"
     echo "[step 2] replacing language labels"
@@ -269,10 +263,10 @@ main() {
     if [ "$SKIP_DOWNLOAD" = true ]; then
         echo "[step 1] skipped (--local), reading from $DOWNLOAD_DIR"
         [ -d "$DOWNLOAD_DIR" ] || { echo "FATAL: $DOWNLOAD_DIR does not exist" >&2; exit 1; }
+        replace_labels
     else
         download_and_label_parallel
     fi
-    replace_labels
     convert_s2t
     convert_t2gov
     batch_fixes
