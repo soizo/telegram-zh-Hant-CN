@@ -69,21 +69,64 @@ setup_t2gov() {
     [ -d "$JIEBA_DIR" ] || { echo "FATAL: jieba dictionary directory not found" >&2; exit 1; }
 }
 
-# -- step 1: download ---------------------------------------------------------
-download_files() {
-    mkdir -p "$DOWNLOAD_DIR"
-    echo "[step 1] downloading zh-Hans exports"
-    for entry in "${PLATFORMS[@]}"; do
-        IFS='|' read -r name url filename <<< "$entry"
-        echo "  $name -> $filename"
-        if curl -fL --progress-bar -o "$DOWNLOAD_DIR/$filename" "$url"; then
-            printf "  %-12s ok (%sB)\n" "$name" "$(wc -c < "$DOWNLOAD_DIR/$filename" | tr -d ' ')"
-        else
-            printf "  %-12s FAILED (skipped)\n" "$name"
-        fi
-    done
+# -- label-replacement (on simplified source) ---------------------------------
+# Done BEFORE s2t so that OpenCC converts our replacement text to traditional.
+#   简体中文             -> 繁体中文(大陆)     (s2t will yield 繁體中文(大陸))
+#   Chinese (Simplified) -> Traditional Chinese (Mainland)
+#   zh_hans              -> zh_hant_cn       (Telegram underscore convention)
+#   zh-hans              -> zh-Hant-CN       (BCP 47 canonical form)
+label_one() {
+    local src="$1" dst="$2"
+    sed \
+        -e 's/简体中文/繁体中文(大陆)/g' \
+        -e 's/中文(简体)/繁体中文(大陆)/g' \
+        -e 's/Chinese (Simplified)/Traditional Chinese (Mainland)/g' \
+        -e 's/Chinese(Simplified)/Traditional Chinese (Mainland)/g' \
+        -e 's/zh_hans/zh_hant_cn/g' \
+        -e 's/zh-hans/zh-Hant-CN/g' \
+        "$src" > "$dst"
 }
 
+# -- steps 1+2: download + label-replace, pipelined per platform ---------------
+# All platforms run in parallel; each one moves to label-replace as soon as
+# its download finishes, so slow downloads don't block fast ones.
+download_and_label_one() {
+    local name="$1" url="$2" filename="$3"
+    local src="$DOWNLOAD_DIR/$filename"
+    local dst="$LABELLED_DIR/$filename"
+    # curl retries transient errors (timeout, DNS, 5xx, connection refused)
+    # with exponential backoff. --retry-all-errors also covers HTTP 4xx, which
+    # translations.telegram.org occasionally throws under load.
+    local attempt
+    for attempt in 1 2 3; do
+        if curl -fsSL \
+                --retry 5 --retry-delay 2 --retry-connrefused --retry-all-errors \
+                --connect-timeout 15 --max-time 180 \
+                -o "$src" "$url"; then
+            local size; size=$(wc -c < "$src" | tr -d ' ')
+            label_one "$src" "$dst"
+            printf "  %-12s ok (%sB)%s\n" "$name" "$size" \
+                "$([ "$attempt" -gt 1 ] && echo " [after ${attempt} tries]")"
+            return 0
+        fi
+        printf "  %-12s download attempt %d failed, retrying...\n" "$name" "$attempt"
+        sleep $((attempt * 3))
+    done
+    printf "  %-12s FAILED after 3 outer retries\n" "$name"
+    return 0
+}
+
+download_and_label_parallel() {
+    mkdir -p "$DOWNLOAD_DIR" "$LABELLED_DIR"
+    echo "[step 1+2] downloading + replacing labels (parallel)"
+    for entry in "${PLATFORMS[@]}"; do
+        IFS='|' read -r name url filename <<< "$entry"
+        download_and_label_one "$name" "$url" "$filename" &
+    done
+    wait
+}
+
+# Used in --local mode only (no downloads to overlap with).
 # -- step 2: replace language labels (on simplified source) --------------------
 # Done BEFORE s2t so that OpenCC converts our replacement text to traditional.
 #   简体中文             -> 繁体中文(大陆)     (s2t will yield 繁體中文(大陸))
@@ -98,14 +141,7 @@ replace_labels() {
         local src="$DOWNLOAD_DIR/$filename"
         local dst="$LABELLED_DIR/$filename"
         [ -f "$src" ] || { printf "  %-12s skipped (no source)\n" "$name"; continue; }
-        sed \
-            -e 's/简体中文/繁体中文(大陆)/g' \
-            -e 's/中文(简体)/繁体中文(大陆)/g' \
-            -e 's/Chinese (Simplified)/Traditional Chinese (Mainland)/g' \
-            -e 's/Chinese(Simplified)/Traditional Chinese (Mainland)/g' \
-            -e 's/zh_hans/zh_hant_cn/g' \
-            -e 's/zh-hans/zh-Hant-CN/g' \
-            "$src" > "$dst"
+        label_one "$src" "$dst"
         printf "  %-12s done\n" "$name"
     done
 }
@@ -234,7 +270,7 @@ main() {
         echo "[step 1] skipped (--local), reading from $DOWNLOAD_DIR"
         [ -d "$DOWNLOAD_DIR" ] || { echo "FATAL: $DOWNLOAD_DIR does not exist" >&2; exit 1; }
     else
-        download_files
+        download_and_label_parallel
     fi
     replace_labels
     convert_s2t
