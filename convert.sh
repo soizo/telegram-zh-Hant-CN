@@ -22,6 +22,7 @@ S2T_DIR="$SCRIPT_DIR/03-s2t-standard-Hant"
 OUTPUT_DIR="$SCRIPT_DIR/04-output-zh-Hant-CN"
 T2GOV_REPO="https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards.git"
 T2GOV_DIR="$SCRIPT_DIR/.opencc-t2gov"
+FROM_STEP=1
 
 # platform|url|filename
 PLATFORMS=(
@@ -163,6 +164,45 @@ convert_t2gov() {
     done
 }
 
+# -- usage / args --------------------------------------------------------------
+usage() {
+    cat >&2 <<EOF
+usage: $0 [--from N] [--local]
+
+  --from N    start from step N (1-5), reusing prior outputs on disk:
+                1 = download zh-Hans sources + label-replace (default)
+                2 = label-replace only (sources must exist in 01-source-zh-Hans/)
+                3 = OpenCC s2t (input: 02-labels-replaced/)
+                4 = OpenCC t2gov (input: 03-s2t-standard-Hant/)
+                5 = general polish (in-place on 04-output-zh-Hant-CN/)
+  --local     alias for --from 2 (skip download)
+  -h, --help  show this help
+EOF
+    exit 1
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from)
+                shift
+                [[ "${1:-}" =~ ^[1-5]$ ]] || { echo "--from requires a step number 1-5 (got: ${1:-<empty>})" >&2; usage; }
+                FROM_STEP="$1"; shift
+                ;;
+            --local) FROM_STEP=2; shift ;;
+            -h|--help) usage ;;
+            *) echo "unknown option: $1" >&2; usage ;;
+        esac
+    done
+}
+
+# Pre-flight: when starting mid-pipeline, the previous step's output dir must
+# already exist (otherwise the step has nothing to read).
+require_dir() {
+    local dir="$1" hint="$2"
+    [ -d "$dir" ] || { echo "FATAL: $dir does not exist — $hint" >&2; exit 1; }
+}
+
 # -- step 5: general polish ----------------------------------------------------
 # Rules live in sed/05.sed (typographic / cross-step conventions, e.g. full-width
 # punctuation -> half-width).
@@ -188,14 +228,33 @@ batch_fixes() {
 
 # -- main ----------------------------------------------------------------------
 main() {
+    parse_args "$@"
     echo "telegram zh-Hans -> zh-Hant-CN conversion"
     echo "==========================================="
+    [ "$FROM_STEP" -gt 1 ] && echo "(starting from step $FROM_STEP)"
     check_deps
-    setup_t2gov
-    download_and_label_parallel
-    convert_s2t
-    convert_t2gov
-    batch_fixes
+    # t2gov repo only needed for step 4; skip its clone/pull if starting later.
+    [ "$FROM_STEP" -le 4 ] && setup_t2gov
+
+    if [ "$FROM_STEP" -le 1 ]; then
+        download_and_label_parallel
+    elif [ "$FROM_STEP" -eq 2 ]; then
+        require_dir "$DOWNLOAD_DIR" "run with --from 1 first to download sources"
+        replace_labels
+    fi
+    if [ "$FROM_STEP" -le 3 ]; then
+        require_dir "$LABELLED_DIR" "run with --from 2 (or earlier) first"
+        convert_s2t
+    fi
+    if [ "$FROM_STEP" -le 4 ]; then
+        require_dir "$S2T_DIR" "run with --from 3 (or earlier) first"
+        convert_t2gov
+    fi
+    if [ "$FROM_STEP" -le 5 ]; then
+        require_dir "$OUTPUT_DIR" "run with --from 4 (or earlier) first"
+        batch_fixes
+    fi
+
     echo "==========================================="
     echo "done. output in $OUTPUT_DIR/"
     ls -lh "$OUTPUT_DIR/" 2>/dev/null || echo "  (empty)"
