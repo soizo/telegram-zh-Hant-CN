@@ -5,8 +5,8 @@ set -euo pipefail
 # ---------------------------------------------------
 # 1) Download zh-Hans translation exports from translations.telegram.org
 # 2) Replace language labels (simplified text) with zh-Hant-CN equivalents
-# 3) jieba segmentation + OpenCC s2t: Simplified -> Standard Traditional
-# 4) jieba segmentation + t2gov: Standard Traditional -> PRC-standard glyphs
+# 3) OpenCC s2t: Simplified -> Standard Traditional
+# 4) OpenCC t2gov: Standard Traditional -> PRC-standard glyphs
 #
 # Language tag reference (BCP 47 / IANA):
 #   zh-Hans    = Chinese, Simplified script (script subtag, NOT region)
@@ -22,9 +22,6 @@ S2T_DIR="$SCRIPT_DIR/03-s2t-standard-Hant"
 OUTPUT_DIR="$SCRIPT_DIR/04-output-zh-Hant-CN"
 T2GOV_REPO="https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards.git"
 T2GOV_DIR="$SCRIPT_DIR/.opencc-t2gov"
-JIEBA_SCRIPT="$SCRIPT_DIR/jieba_segment.py"
-JIEBA_DIR="$T2GOV_DIR/jieba"
-SKIP_DOWNLOAD=false
 
 # platform|url|filename
 PLATFORMS=(
@@ -42,39 +39,29 @@ PLATFORMS=(
 # -- dependency check ----------------------------------------------------------
 check_deps() {
     local missing=()
-    for cmd in opencc curl git sed python3; do
+    for cmd in opencc curl git sed; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
     if [ ${#missing[@]} -gt 0 ]; then
         echo "FATAL: missing dependencies: ${missing[*]}" >&2
-        echo "  brew install opencc curl git python3" >&2
-        exit 1
-    fi
-    if ! python3 -c "import jieba" 2>/dev/null; then
-        echo "FATAL: jieba Python package not installed" >&2
-        echo "  pip3 install jieba" >&2
+        echo "  brew install opencc curl git" >&2
         exit 1
     fi
 }
 
 # -- step 0: prepare t2gov config ---------------------------------------------
 setup_t2gov() {
-    echo "[setup] t2gov dictionary + jieba"
+    echo "[setup] t2gov dictionary"
     if [ -d "$T2GOV_DIR" ]; then
         git -C "$T2GOV_DIR" pull --quiet
     else
         git clone --quiet --depth 1 "$T2GOV_REPO" "$T2GOV_DIR"
     fi
     [ -f "$T2GOV_DIR/t2gov/t2gov.json" ] || { echo "FATAL: t2gov/t2gov.json not found" >&2; exit 1; }
-    [ -d "$JIEBA_DIR" ] || { echo "FATAL: jieba dictionary directory not found" >&2; exit 1; }
 }
 
 # -- label-replacement (on simplified source) ---------------------------------
 # Done BEFORE s2t so that OpenCC converts our replacement text to traditional.
-#   简体中文             -> 繁体中文(大陆)     (s2t will yield 繁體中文(大陸))
-#   Chinese (Simplified) -> Traditional Chinese (Mainland)
-#   zh_hans              -> zh_hant_cn       (Telegram underscore convention)
-#   zh-hans              -> zh-Hant-CN       (BCP 47 canonical form)
 label_one() {
     local src="$1" dst="$2"
     sed \
@@ -140,57 +127,49 @@ replace_labels() {
     done
 }
 
-# -- step 3: jieba + opencc s2t -----------------------------------------------
+# -- step 3: opencc s2t (Simplified -> Standard Traditional) ------------------
+# OpenCC's mmseg segmenter is tuned for its own dictionary; pre-segmenting with
+# jieba+\x1e was found to disrupt phrase matches (e.g. 「不至於」 → 「不至于」 was
+# being split apart, leaving 「於」 unconverted).
+# After s2t, sed/03.sed patches misparses (天后→天後, 隻能→衹能, 线→綫…) before
+# t2gov sees the file.
 convert_s2t() {
     mkdir -p "$S2T_DIR"
-    echo "[step 3] jieba segmentation + OpenCC s2t"
-    local seg_dir
-    seg_dir=$(mktemp -d)
-    python3 "$JIEBA_SCRIPT" "$LABELLED_DIR" "$seg_dir" \
-        --dict "$JIEBA_DIR/jieba.dict.ancient.chinese.utf8" \
-        --userdict "$JIEBA_DIR/user.dict.utf8"
+    echo "[step 3] OpenCC s2t"
     for entry in "${PLATFORMS[@]}"; do
         IFS='|' read -r name url filename <<< "$entry"
-        local src="$seg_dir/$filename"
+        local src="$LABELLED_DIR/$filename"
         local dst="$S2T_DIR/$filename"
         [ -f "$src" ] || { printf "  %-12s skipped\n" "$name"; continue; }
         opencc -c s2t -i "$src" -o "$dst"
-        # Remove jieba segment markers (\036 = \x1e = RS)
-        LC_ALL=C tr -d '\036' < "$dst" > "$dst.tmp" && mv "$dst.tmp" "$dst"
         printf "  %-12s done\n" "$name"
     done
-    rm -rf "$seg_dir"
 }
 
-# -- step 4: jieba + t2gov ----------------------------------------------------
+# -- step 4: opencc t2gov (Standard Traditional -> PRC-standard glyphs) -------
+# After t2gov, sed/04.sed patches glyph errors (裏→里 in names, 複→復, residual
+# 於→于 fallback for cases OpenCC's phrase rules can't reach).
 convert_t2gov() {
     mkdir -p "$OUTPUT_DIR"
-    echo "[step 4] jieba segmentation + t2gov"
+    echo "[step 4] OpenCC t2gov"
     local cfg="$T2GOV_DIR/t2gov/t2gov.json"
-    local seg_dir
-    seg_dir=$(mktemp -d)
-    python3 "$JIEBA_SCRIPT" "$S2T_DIR" "$seg_dir" \
-        --dict "$JIEBA_DIR/jieba.dict.ancient.chinese.traditional.utf8" \
-        --userdict "$JIEBA_DIR/user.dict.traditional.utf8"
     for entry in "${PLATFORMS[@]}"; do
         IFS='|' read -r name url filename <<< "$entry"
-        local src="$seg_dir/$filename"
+        local src="$S2T_DIR/$filename"
         local dst="$OUTPUT_DIR/$filename"
         [ -f "$src" ] || { printf "  %-12s skipped\n" "$name"; continue; }
         opencc -c "$cfg" -i "$src" -o "$dst"
-        # Remove jieba segment markers (\036 = \x1e = RS)
-        LC_ALL=C tr -d '\036' < "$dst" > "$dst.tmp" && mv "$dst.tmp" "$dst"
         printf "  %-12s done\n" "$name"
     done
-    rm -rf "$seg_dir"
 }
 
-# -- step 5: batch fixes -------------------------------------------------------
-# a) full-width brackets -> half-width; curly quotes -> straight quotes
-# b) OpenCC s2t misparses
-# c) t2gov glyph errors
+# -- step 5: general polish ----------------------------------------------------
+# Rules live in sed/05.sed (typographic / cross-step conventions, e.g. full-width
+# punctuation -> half-width).
+# Convention: sed/NN.sed, where NN matches the step number that applies it.
+# Each step reads its own NN.sed; to add new rule files, drop them into sed/.
 batch_fixes() {
-    echo "[step 5] batch fixes"
+    echo "[step 5] general polish"
     for entry in "${PLATFORMS[@]}"; do
         IFS='|' read -r name url filename <<< "$entry"
         local f="$OUTPUT_DIR/$filename"
@@ -202,71 +181,18 @@ batch_fixes() {
             -e $'s/\xe2\x80\x9d/\xe3\x80\x8d/g' \
             -e $'s/\xe2\x80\x98/\xe3\x80\x8e/g' \
             -e $'s/\xe2\x80\x99/\xe3\x80\x8f/g' \
-            -e 's/天后/天後/g' \
-            -e 's/撤消/撤銷/g' \
-            -e 's/撒銷/撤銷/g' \
-            -e 's/帳號/賬號/g' \
-            -e 's/才/纔/g' \
-            -e 's/回覆/回復/g' \
-            -e 's/迴/回/g' \
-            -e 's/佣/傭/g' \
-            -e 's/夥伴/伙伴/g' \
-            -e 's/錶情/表情/g' \
-            -e 's/隻能/衹能/g' \
-            -e 's/只/衹/g' \
-            -e 's/左劃/左划/g' \
-            -e 's/右劃/右划/g' \
-            -e 's/上劃/上划/g' \
-            -e 's/下劃/下划/g' \
-            -e 's/下划綫/下劃綫/g' \
-            -e 's/座標/坐標/g' \
-            -e 's/云/雲/g' \
-            -e 's/加布裏埃拉/加布里埃拉/g' \
-            -e 's/哈裏斯/哈里斯/g' \
-            -e 's/奧裏亞/奧里亞/g' \
-            -e 's/弗裏斯蘭/弗里斯蘭/g' \
-            -e 's/斯瓦希裏/斯瓦希里/g' \
-            -e 's/克裏奧爾/克里奧爾/g' \
-            -e 's/索馬裏/索馬里/g' \
-            -e 's/公裏/公里/g' \
-            -e 's/英裏/英里/g' \
-            -e 's/线/綫/g' \
             "$f"
         printf "  %-12s done\n" "$name"
     done
 }
 
-# -- usage / args --------------------------------------------------------------
-usage() {
-    echo "usage: $0 [--local]" >&2
-    echo "  --local  skip download, read source files from $DOWNLOAD_DIR" >&2
-    exit 1
-}
-
-parse_args() {
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --local) SKIP_DOWNLOAD=true; shift ;;
-            -h|--help) usage ;;
-            *) echo "unknown option: $1" >&2; usage ;;
-        esac
-    done
-}
-
 # -- main ----------------------------------------------------------------------
 main() {
-    parse_args "$@"
     echo "telegram zh-Hans -> zh-Hant-CN conversion"
     echo "==========================================="
     check_deps
     setup_t2gov
-    if [ "$SKIP_DOWNLOAD" = true ]; then
-        echo "[step 1] skipped (--local), reading from $DOWNLOAD_DIR"
-        [ -d "$DOWNLOAD_DIR" ] || { echo "FATAL: $DOWNLOAD_DIR does not exist" >&2; exit 1; }
-        replace_labels
-    else
-        download_and_label_parallel
-    fi
+    download_and_label_parallel
     convert_s2t
     convert_t2gov
     batch_fixes
