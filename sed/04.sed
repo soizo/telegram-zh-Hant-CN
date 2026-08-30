@@ -19,8 +19,9 @@ s/索馬裏/索馬里/g
 s/公裏/公里/g
 s/英裏/英里/g
 
-# --- 複 -> 復 for PRC convention cases t2gov misses ---
+# --- PRC convention cases t2gov misses ---
 s/複/復/g
+s/並/并/g
 
 # --- fallback: 於 -> 于 for cases OpenCC's phrase rules can't reach ---
 # The mainland standard collapses 於 to 于 universally, but t2gov leaves single
