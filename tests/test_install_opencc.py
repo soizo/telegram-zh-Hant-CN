@@ -13,6 +13,7 @@ class InstallerTests(unittest.TestCase):
         )
         self.assertNotIn("scripts/install_opencc.py", workflow)
         self.assertNotIn("apt-get install --yes opencc", workflow)
+        self.assertNotIn("dist/emoji.strings", workflow)
 
 
 if __name__ == "__main__":

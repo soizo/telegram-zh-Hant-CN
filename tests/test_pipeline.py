@@ -9,6 +9,7 @@ from zipfile import ZipFile
 
 from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
     FINAL_FILENAMES,
+    PLATFORMS,
     PipelineError,
     create_deterministic_zip,
     download_t2gov,
@@ -17,6 +18,7 @@ from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
     publish_outputs,
     run_opencc,
     safe_extract_zip,
+    validate_export,
 )
 
 
@@ -39,6 +41,14 @@ class DownloadTests(unittest.TestCase):
     def test_empty_download_fails(self, _https_get) -> None:
         with self.assertRaisesRegex(PipelineError, "empty response"):
             download_text("https://example.invalid/file", attempts=1)
+
+    def test_unsupported_emoji_export_is_excluded(self) -> None:
+        self.assertEqual(len(PLATFORMS), 8)
+        self.assertNotIn("emoji.strings", FINAL_FILENAMES)
+
+    def test_html_export_is_rejected(self) -> None:
+        with self.assertRaisesRegex(PipelineError, "returned HTML"):
+            validate_export(PLATFORMS[0], "<!DOCTYPE html><html></html>")
 
 
 class ArchiveTests(unittest.TestCase):

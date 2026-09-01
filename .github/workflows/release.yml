@@ -50,7 +50,6 @@ jobs:
           gh release create "$TAG"
           dist/android.xml
           dist/android_x.xml
-          dist/emoji.strings
           dist/ios.strings
           dist/macos.strings
           dist/tdesktop.strings

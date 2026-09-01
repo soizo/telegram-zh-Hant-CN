@@ -65,11 +65,6 @@ PLATFORMS = (
         "https://translations.telegram.org/zh-hans/unigram/export",
         "unigram.xml",
     ),
-    Platform(
-        "emoji",
-        "https://translations.telegram.org/zh-hans/emoji/export",
-        "emoji.strings",
-    ),
 )
 FINAL_FILENAMES = tuple(sorted(platform.filename for platform in PLATFORMS))
 
@@ -147,6 +142,14 @@ def download_text(url: str, *, attempts: int = 3, timeout: float = 180) -> str:
         raise PipelineError(f"response from {url} is not UTF-8") from error
 
 
+def validate_export(platform: Platform, text: str) -> None:
+    start = text.lstrip("\ufeff \t\r\n").lower()
+    if start.startswith(("<!doctype html", "<html")):
+        raise PipelineError(
+            f"{platform.name} export returned HTML instead of translations"
+        )
+
+
 def _read_text(path: Path) -> str:
     with path.open(encoding="utf-8", newline="") as file:
         return file.read()
@@ -162,8 +165,10 @@ def download_sources(destination: Path) -> tuple[Path, ...]:
     destination.mkdir(parents=True, exist_ok=True)
 
     def download(platform: Platform) -> Path:
+        text = download_text(platform.url)
+        validate_export(platform, text)
         path = destination / platform.filename
-        _write_text(path, download_text(platform.url))
+        _write_text(path, text)
         return path
 
     with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as executor:
