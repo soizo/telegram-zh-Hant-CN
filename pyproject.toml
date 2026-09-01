@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Convert Telegram zh-Hans translations to zh-Hant-CN"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
+license = "MIT"
 authors = [{ name = "soizo" }]
 dependencies = []
 

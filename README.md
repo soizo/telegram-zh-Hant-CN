@@ -74,4 +74,4 @@ If the files are unchanged, no tag or Release is created. Generated translations
 
 ## Licence
 
-[Apache-2.0](LICENSE)
+[MIT](LICENSE)
