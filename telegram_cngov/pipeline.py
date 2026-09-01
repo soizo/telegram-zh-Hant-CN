@@ -259,6 +259,8 @@ def run_opencc(source: Path, destination: Path, config: str | Path) -> None:
         ) from error
     except CalledProcessError as error:
         raise PipelineError(f"OpenCC failed for {source.name}") from error
+    if not destination.is_file():
+        raise PipelineError(f"OpenCC produced no output for {source.name}")
 
 
 def opencc_directory(

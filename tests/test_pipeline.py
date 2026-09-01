@@ -89,11 +89,21 @@ class OpenCCTests(unittest.TestCase):
             root = Path(directory)
             source = root / "in.txt"
             output = root / "out.txt"
+            run.side_effect = lambda *_args, **_kwargs: output.write_text(
+                "converted", encoding="utf-8"
+            )
             run_opencc(source, output, "s2t")
             run.assert_called_once_with(
                 ["opencc", "-c", "s2t", "-i", str(source), "-o", str(output)],
                 check=True,
             )
+
+    @patch("telegram_cngov.pipeline.run")
+    def test_opencc_must_create_output(self, _run) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(PipelineError, "produced no output"):
+                run_opencc(root / "in", root / "out", "s2t")
 
     @patch("telegram_cngov.pipeline.run", side_effect=CalledProcessError(1, ["opencc"]))
     def test_opencc_failure_is_reported(self, _run) -> None:
