@@ -1,0 +1,8 @@
+{
+  "include": ["telegram_cngov", "scripts", "tests"],
+  "executionEnvironments": [
+    { "root": "telegram_cngov", "extraPaths": [".."] },
+    { "root": "scripts", "extraPaths": [".."] },
+    { "root": "tests", "extraPaths": [".."] }
+  ]
+}

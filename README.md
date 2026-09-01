@@ -2,37 +2,76 @@
 
 **Apply the language pack in Telegram:** [t.me/setlanguage/chinese-traditional-mainland](https://t.me/setlanguage/chinese-traditional-mainland)
 
-Bash pipeline for converting Telegram's Simplified Chinese (zh-Hans) translation files into **Traditional Chinese with PRC-standard glyphs** (zh-Hant-CN).
+Python pipeline for converting Telegram's Simplified Chinese (`zh-Hans`) translation exports into **Traditional Chinese with PRC-standard glyphs** (`zh-Hant-CN`).
 
-## What it does
+## Pipeline
 
-1. **Download** — fetches zh-Hans translation exports for all Telegram platforms (Android, iOS, tdesktop, macOS, Android X, Web-K, Web-A, Unigram, Emoji) from `translations.telegram.org`.
-2. **Label replacement** — rewrites language identifiers (`简体中文` -> `繁体中文(大陆)`, `zh_hans` -> `zh_hant_cn`, etc.) while still in simplified text so that OpenCC converts them correctly.
-3. **OpenCC s2t** — Simplified to Standard Traditional, phrase-preserving.
-4. **t2gov** — Standard Traditional to PRC-standard Traditional glyphs, using [OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards](https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards).
-5. **Batch fixes** — corrects known OpenCC misparses and t2gov errata (see comments in `convert.sh` for the full list).
+1. Download exports for Android, iOS, Telegram Desktop, macOS, Android X, Web K, Web A, Unigram, and Emoji.
+2. Replace language labels and tags before conversion.
+3. Convert Simplified Chinese to standard Traditional Chinese with OpenCC `s2t`.
+4. Apply the latest [`t2gov`](https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards) rules.
+5. Apply project corrections and typography rules.
 
-## Language tag
+## Requirements
 
-`zh-Hant-CN` is an [IANA-registered](https://www.iana.org/assignments/lang-tag-apps/zh-Hant-CN) BCP 47 tag (registered 2005-04-26) meaning *PRC Mainland Chinese written in Traditional script*. `Hans`/`Hant` are **script** subtags, not region codes; `CN` is the region subtag.
+- Python 3.11 or newer
+- Official [OpenCC](https://github.com/BYVoid/OpenCC) CLI
 
-## Dependencies
+```console
+# macOS
+brew install opencc
 
-- [OpenCC](https://github.com/BYVoid/OpenCC) (`brew install opencc`)
-- `curl`, `git`, `sed`
+# Ubuntu
+sudo apt-get install opencc
+```
+
+## Installation
+
+```console
+python -m pip install --editable .
+```
 
 ## Usage
 
-```sh
-# full run: download + convert
-./convert.sh
+```console
+# Full conversion; intermediate stages are deleted automatically
+telegram-cngov
 
-# skip download, use existing files in 01-source-zh-Hans/
-./convert.sh --local
+# Select the final output directory
+telegram-cngov --output dist
+
+# Keep intermediate stages for inspection
+telegram-cngov --work-dir .work
+
+# Resume from a retained stage
+telegram-cngov --work-dir .work --from 3
 ```
 
-Output lands in `04-output-zh-Hant-CN/`.
+The final directory contains nine platform files. `--from` accepts stages 1–5 and requires `--work-dir`.
+
+## Development
+
+```console
+python -m unittest discover -s tests -v
+python -m compileall -q telegram_cngov scripts tests
+```
+
+## Automation
+
+CI validates pushes and pull requests. The update workflow runs at 03:00 UTC on calendar days **1, 6, 11, 16, 21, 26, and 31**, and can also be started manually. Month boundaries are therefore not always exactly 120 hours apart.
+
+When the nine generated files differ from the latest published checksums, the workflow creates a date-tagged Release (`vYYYY.MM.DD`) containing:
+
+- all nine translation files;
+- a deterministic ZIP archive;
+- `SHA256SUMS`.
+
+If the files are unchanged, no tag or Release is created. Generated translations are never committed to `main`.
+
+## Language tag
+
+`zh-Hant-CN` is an [IANA-registered](https://www.iana.org/assignments/lang-tag-apps/zh-Hant-CN) BCP 47 tag (registered 2005-04-26) meaning Chinese written in Traditional script for the PRC mainland region. `Hans` and `Hant` are script subtags; `CN` is the region subtag.
 
 ## Licence
 
-[Apache-2.0](LICENCE)
+[Apache-2.0](LICENSE)

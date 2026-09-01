@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-cngov"
+version = "0.1.0"
+description = "Convert Telegram zh-Hans translations to zh-Hant-CN"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "soizo" }]
+dependencies = []
+
+[project.scripts]
+telegram-cngov = "telegram_cngov.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["telegram_cngov*"]

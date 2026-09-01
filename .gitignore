@@ -17,4 +17,5 @@ dist/
 # Local environment
 .DS_Store
 .claude/
+.pi/
 docs/superpowers/
