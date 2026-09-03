@@ -15,6 +15,7 @@ from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
     download_t2gov,
     download_text,
     final_hashes,
+    polish_outputs,
     publish_outputs,
     run_opencc,
     safe_extract_zip,
@@ -49,6 +50,22 @@ class DownloadTests(unittest.TestCase):
     def test_html_export_is_rejected(self) -> None:
         with self.assertRaisesRegex(PipelineError, "returned HTML"):
             validate_export(PLATFORMS[0], "<!DOCTYPE html><html></html>")
+
+
+class PolishTests(unittest.TestCase):
+    def test_same_direction_corner_quotes_are_paired(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for malformed in ("「文字「", "」文字」"):
+                for name in FINAL_FILENAMES:
+                    (root / name).write_text(malformed, encoding="utf-8")
+
+                polish_outputs(root)
+
+                for name in FINAL_FILENAMES:
+                    self.assertEqual(
+                        (root / name).read_text(encoding="utf-8"), "「文字」"
+                    )
 
 
 class ArchiveTests(unittest.TestCase):

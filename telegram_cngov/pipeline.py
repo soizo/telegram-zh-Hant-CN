@@ -283,7 +283,8 @@ def polish_outputs(directory: Path) -> None:
     _require_files(directory)
     for name in FINAL_FILENAMES:
         path = directory / name
-        _write_text(path, apply_rules(_read_text(path), POLISH_RULES))
+        text = apply_rules(_read_text(path), POLISH_RULES)
+        _write_text(path, re.sub(r"[「」]([^「」\n]*)[「」]", r"「\1」", text))
 
 
 def _restore_backup(backup: Path | None, output: Path) -> None:
