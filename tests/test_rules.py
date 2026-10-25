@@ -5,6 +5,7 @@ from telegram_cngov.rules import (  # pyright: ignore[reportMissingImports]
     POLISH_RULES,
     S2T_RULES,
     T2GOV_RULES,
+    apply_label_rules,
     apply_rules,
 )
 
@@ -26,6 +27,24 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(
             apply_rules("简体中文 zh_hans zh-hans", LABEL_RULES),
             "繁体中文(大陆) zh_hant_cn zh-Hant-CN",
+        )
+
+    def test_other_language_names_are_not_renamed(self) -> None:
+        self.assertEqual(
+            apply_label_rules(
+                '"LanguageName" = "简体中文";\n'
+                '"Translate.Language.Chinese_Simplified" = "简体中文";\n'
+                '"Translation.LanguageTo.ZH" = "中文";\n'
+                '"TranslateLanguageZH" = "中文";\n'
+            ),
+            '"LanguageName" = "繁体中文(大陆)";\n'
+            '"Translate.Language.Chinese_Simplified" = "简体中文";\n'
+            '"Translation.LanguageTo.ZH" = "中文";\n'
+            '"TranslateLanguageZH" = "中文";\n',
+        )
+        self.assertEqual(
+            apply_label_rules('<string name="Language.zh-CN">简体中文</string>'),
+            '<string name="Language.zh-CN">简体中文</string>',
         )
 
 

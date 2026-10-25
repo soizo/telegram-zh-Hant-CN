@@ -15,7 +15,14 @@ from urllib.error import URLError
 from urllib.parse import urljoin, urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
-from .rules import LABEL_RULES, POLISH_RULES, S2T_RULES, T2GOV_RULES, Rules, apply_rules
+from .rules import (
+    POLISH_RULES,
+    S2T_RULES,
+    T2GOV_RULES,
+    Rules,
+    apply_label_rules,
+    apply_rules,
+)
 
 T2GOV_REPOSITORY = (
     "TerryTian-tech/"
@@ -241,13 +248,13 @@ def _require_files(directory: Path) -> None:
         )
 
 
-def transform_directory(source: Path, destination: Path, rules: Rules) -> None:
+def replace_language_labels(source: Path, destination: Path) -> None:
     _require_files(source)
     destination.mkdir(parents=True, exist_ok=True)
     for platform in PLATFORMS:
         _write_text(
             destination / platform.filename,
-            apply_rules(_read_text(source / platform.filename), rules),
+            apply_label_rules(_read_text(source / platform.filename)),
         )
 
 
@@ -327,7 +334,7 @@ def _run_in_workspace(root: Path, output: Path, from_step: int) -> BuildResult:
     if from_step <= 1:
         download_sources(paths.source)
     if from_step <= 2:
-        transform_directory(paths.source, paths.labelled, LABEL_RULES)
+        replace_language_labels(paths.source, paths.labelled)
     if from_step <= 3:
         opencc_directory(paths.labelled, paths.s2t, "s2t", S2T_RULES)
     if from_step <= 4:

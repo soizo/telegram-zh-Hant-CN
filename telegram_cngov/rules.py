@@ -1,5 +1,7 @@
 """Ordered literal corrections for each conversion stage."""
 
+import re
+
 Rule = tuple[str, str]
 Rules = tuple[Rule, ...]
 
@@ -62,7 +64,26 @@ POLISH_RULES: Rules = (
 )
 
 
+# Entries that name other languages, not this language pack.
+FOREIGN_LANGUAGE_KEY = re.compile(
+    r'^\s*(?:<string\s+name="?|")('
+    r'Language\.[a-z]{2,3}(?:-[A-Za-z]{2,4})?'
+    r'|Translate\.Language[."]'
+    r'|Translation\.Language[."]'
+    r'|TranslateLanguage'
+    r')'
+)
+
+
 def apply_rules(text: str, rules: Rules) -> str:
     for old, new in rules:
         text = text.replace(old, new)
     return text
+
+
+def apply_label_rules(text: str) -> str:
+    """Rename this pack without relabelling the languages it points at."""
+    return "".join(
+        line if FOREIGN_LANGUAGE_KEY.match(line) else apply_rules(line, LABEL_RULES)
+        for line in text.splitlines(keepends=True)
+    )
