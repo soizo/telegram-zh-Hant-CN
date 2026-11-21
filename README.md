@@ -1,4 +1,4 @@
-# Telegram-zh-Hant-CN
+# Telegram Chinese Traditional (Mainland)
 
 **Apply the language pack in Telegram:** [t.me/setlanguage/chinese-traditional-mainland](https://t.me/setlanguage/chinese-traditional-mainland)
 
