@@ -2,6 +2,9 @@
 name: Update translations
 
 "on":
+  push:
+    branches: [main]
+    paths: [.github/gov-upstream.json]
   schedule:
     - cron: "0 3 1,6,11,16,21,26,31 * *"
   workflow_dispatch:
