@@ -19,10 +19,23 @@ Converts Telegram's Simplified Chinese (`zh-Hans`) translation exports into
 The output directory contains the eight platform files, a deterministic ZIP
 archive, and `SHA256SUMS`.
 
+## Standard
+
+The target is the PRC government standard for Traditional Chinese characters,
+as encoded by the community-maintained
+[`t2gov`](https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards)
+OpenCC configuration. Every run downloads the newest `t2gov` commit and prints
+its SHA, so any build can be traced back to the exact character rules it used.
+
+`rules.yml` holds only this project's own corrections on top of that standard;
+it is not a replacement for it.
+
 ## Requirements
 
 - Python 3.11 or newer
 - The official [OpenCC](https://github.com/BYVoid/OpenCC) `opencc` CLI
+- Network access to GitHub, to fetch the latest `t2gov` rules and the Telegram
+  translation exports
 
 ```console
 # macOS
