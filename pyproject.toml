@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "telegram-cngov"
 version = "1.0.0"
-description = "Convert Telegram zh-Hans translations to zh-Hant-CN"
+description = "Convert Telegram zh-Hans language packs to zh-Hant-CN (PRC-standard Traditional Chinese)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
