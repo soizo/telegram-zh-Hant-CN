@@ -64,8 +64,9 @@ use another file.
 
 ## Automation
 
-CI runs the tests. The build workflow runs daily and can be started manually;
-it converts the latest exports and publishes a `vYYYY.MM.DD` release.
+CI runs the tests. The build workflow runs weekly and can be started manually.
+It converts the latest exports and compares the generated `SHA256SUMS` with the
+latest release, publishing a `vYYYY.MM.DD` release only when something changed.
 
 ## Language tag
 

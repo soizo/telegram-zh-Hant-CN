@@ -11,8 +11,9 @@ name: Build
       - pyproject.toml
       - .github/workflows/build.yml
   schedule:
-    # Daily; Telegram translations change continuously.
-    - cron: "0 3 * * *"
+    # Weekly: translation updates arrive in bursts, and a release is only
+    # published when the generated files actually changed.
+    - cron: "0 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +45,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          mkdir -p previous
+          latest=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -n "$latest" ] && gh release download "$latest" --pattern SHA256SUMS --dir previous --clobber; then
+            if cmp -s previous/SHA256SUMS dist/SHA256SUMS; then
+              echo "No changes since $latest; skipping release."
+              exit 0
+            fi
+          fi
           tag="v$(date -u +%Y.%m.%d)"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber

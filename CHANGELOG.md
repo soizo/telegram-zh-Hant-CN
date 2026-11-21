@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The build workflow runs weekly and only publishes a release when the
+  generated checksums differ from the latest release.
+
 ## 1.0.0 — 2026-11-22
 
 Full rewrite around standard OpenCC conversion and a single user-maintained
