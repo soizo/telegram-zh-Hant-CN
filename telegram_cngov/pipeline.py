@@ -16,11 +16,11 @@ from urllib.parse import urljoin, urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from .rules import (
-    POLISH_RULES,
     S2T_RULES,
     T2GOV_RULES,
     Rules,
     apply_label_rules,
+    apply_polish_rules,
     apply_rules,
 )
 
@@ -290,8 +290,7 @@ def polish_outputs(directory: Path) -> None:
     _require_files(directory)
     for name in FINAL_FILENAMES:
         path = directory / name
-        text = apply_rules(_read_text(path), POLISH_RULES)
-        _write_text(path, re.sub(r"[「」]([^「」\n]*)[「」]", r"「\1」", text))
+        _write_text(path, apply_polish_rules(_read_text(path)))
 
 
 def _restore_backup(backup: Path | None, output: Path) -> None:

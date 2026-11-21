@@ -60,18 +60,24 @@ POLISH_RULES: Rules = (
     ("“", "「"),
     ("”", "」"),
     ("‘", "『"),
-    ("’", "』"),
 )
+
+# A single closing quote between ASCII letters is an English apostrophe, not a
+# Chinese quotation mark (e.g. "don't", "Monday's").
+CLOSING_SINGLE_QUOTE = re.compile(r"(?<![A-Za-z])’|’(?![A-Za-z])")
+
+OPENING_QUOTES = {"「": "」", "『": "』"}
+CLOSING_QUOTES = {close: open_ for open_, close in OPENING_QUOTES.items()}
 
 
 # Entries that name other languages, not this language pack.
 FOREIGN_LANGUAGE_KEY = re.compile(
     r'^\s*(?:<string\s+name="?|")('
-    r'Language\.[a-z]{2,3}(?:-[A-Za-z]{2,4})?'
+    r"Language\.[a-z]{2,3}(?:-[A-Za-z]{2,4})?"
     r'|Translate\.Language[."]'
     r'|Translation\.Language[."]'
-    r'|TranslateLanguage'
-    r')'
+    r"|TranslateLanguage"
+    r")"
 )
 
 
@@ -87,3 +93,40 @@ def apply_label_rules(text: str) -> str:
         line if FOREIGN_LANGUAGE_KEY.match(line) else apply_rules(line, LABEL_RULES)
         for line in text.splitlines(keepends=True)
     )
+
+
+def _normalize_line(line: str) -> str:
+    output: list[str] = []
+    stack: list[str] = []
+    for index, char in enumerate(line):
+        if char in OPENING_QUOTES:
+            if stack and stack[-1] == char:
+                output.append(OPENING_QUOTES[char])
+                stack.pop()
+            else:
+                output.append(char)
+                stack.append(char)
+        elif char in CLOSING_QUOTES:
+            opening = CLOSING_QUOTES[char]
+            if stack and stack[-1] == opening:
+                output.append(char)
+                stack.pop()
+            elif any(quote in (opening, char) for quote in line[index + 1 :]):
+                output.append(opening)
+                stack.append(opening)
+            else:
+                output.append(char)
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def normalize_corner_quotes(text: str) -> str:
+    """Pair corner quotes whose opening and closing marks are reversed."""
+    return "".join(_normalize_line(line) for line in text.splitlines(keepends=True))
+
+
+def apply_polish_rules(text: str) -> str:
+    text = apply_rules(text, POLISH_RULES)
+    text = CLOSING_SINGLE_QUOTE.sub("』", text)
+    return normalize_corner_quotes(text)

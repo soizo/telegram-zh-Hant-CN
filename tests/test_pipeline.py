@@ -53,19 +53,43 @@ class DownloadTests(unittest.TestCase):
 
 
 class PolishTests(unittest.TestCase):
-    def test_same_direction_corner_quotes_are_paired(self) -> None:
+    def polish(self, text: str) -> str:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for malformed in ("「文字「", "」文字」"):
-                for name in FINAL_FILENAMES:
-                    (root / name).write_text(malformed, encoding="utf-8")
+            for name in FINAL_FILENAMES:
+                (root / name).write_text(text, encoding="utf-8")
 
-                polish_outputs(root)
+            polish_outputs(root)
 
-                for name in FINAL_FILENAMES:
-                    self.assertEqual(
-                        (root / name).read_text(encoding="utf-8"), "「文字」"
-                    )
+            results = {
+                (root / name).read_text(encoding="utf-8") for name in FINAL_FILENAMES
+            }
+        self.assertEqual(len(results), 1)
+        return results.pop()
+
+    def test_same_direction_corner_quotes_are_paired(self) -> None:
+        for malformed, expected in (
+            ("「文字「", "「文字」"),
+            ("」文字」", "「文字」"),
+            ("『文字『", "『文字』"),
+            ("』文字』", "『文字』"),
+        ):
+            with self.subTest(malformed=malformed):
+                self.assertEqual(self.polish(malformed), expected)
+
+    def test_reversed_corner_quotes_are_turned_around(self) -> None:
+        self.assertEqual(
+            self.polish("點擊 』AI『> 『%s』。"),
+            "點擊 『AI』> 『%s』。",
+        )
+
+    def test_balanced_nested_quotes_are_unchanged(self) -> None:
+        text = "提示詞「使用『喲呵』、『老夥計』等詞語」"
+        self.assertEqual(self.polish(text), text)
+
+    def test_english_apostrophes_are_not_quotes(self) -> None:
+        text = "Monday’s test doesn’t work; Seller’s share."
+        self.assertEqual(self.polish(text), text)
 
 
 class ArchiveTests(unittest.TestCase):
