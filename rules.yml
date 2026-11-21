@@ -1,0 +1,43 @@
+# Project-specific corrections. Everything that OpenCC can do is done by
+# OpenCC; only entries in this file are applied on top of the standard
+# `s2t` and `t2gov` conversions.
+
+# Translation values rewritten before conversion, so the language pack
+# identifies itself correctly. Only whole values are matched, so strings such
+# as "使用简体中文继续" are converted normally.
+labels:
+  "简体中文": "繁体中文(大陆)"
+  "中文(简体)": "繁体中文(大陆)"
+  "Chinese (Simplified)": "Traditional Chinese (Mainland)"
+  "Chinese(Simplified)": "Traditional Chinese (Mainland)"
+  "zh_hans": "zh_hant_cn"
+  "zh-hans": "zh-Hant-CN"
+
+# Applied after OpenCC, in order. These are mainland-usage and typo fixes that
+# the government standard does not cover.
+replacements:
+  # Mainland usage.
+  "帳號": "賬號"
+  "座標": "坐標"
+  # "夥伴": "伙伴"
+  "錶情": "表情"
+  "隻能": "衹能"
+  "並": "并"
+  "迴": "回"
+  # "回覆": "回復"
+
+  # Upstream typos.
+  "撤消": "撤銷"
+  "撒銷": "撤銷"
+  "天后": "天後"
+  "加布裏埃拉": "加布里埃拉"
+
+  # `SendTodayAt` closes its quote with an ASCII apostrophe.
+  "‘發送\\'": "\\'發送\\'"
+
+  # Typography, last so the rules above match the original characters.
+  "（": "("
+  "）": ")"
+  "“": "「"
+  "”": "」"
+  "‘": "『"

@@ -6,12 +6,8 @@ build/
 dist/
 *.egg-info/
 
-# Pipeline workspaces and legacy generated data
+# Pipeline workspace
 .work/
-01-source-zh-Hans/
-02-labels-replaced/
-03-s2t-standard-Hant/
-04-output-zh-Hant-CN/
 .opencc-t2gov/
 
 # Local environment

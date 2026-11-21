@@ -1,71 +1,132 @@
+from __future__ import annotations
+
 import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
 from subprocess import CalledProcessError
+from typing import Self
 from unittest.mock import patch
 from urllib.error import URLError
 from zipfile import ZipFile
 
 from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
+    ARCHIVE_NAME,
     FINAL_FILENAMES,
     PLATFORMS,
     PipelineError,
-    create_deterministic_zip,
+    apply_rules,
+    create_archive,
     download_t2gov,
     download_text,
     final_hashes,
-    polish_outputs,
+    load_rules,
     publish_outputs,
+    repair_quotes,
+    replace_labels,
     run_opencc,
     safe_extract_zip,
     validate_export,
+    write_checksums,
 )
+
+ROOT = Path(__file__).parents[1]
+RULES = load_rules(ROOT / "rules.yml")
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes, url: str = "https://example.invalid/file"):
+        self.payload = payload
+        self.url = url
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self.payload
 
 
 class DownloadTests(unittest.TestCase):
     @patch("telegram_cngov.pipeline.sleep")
-    @patch("telegram_cngov.pipeline._https_get")
-    def test_transient_failure_is_retried(self, https_get, _sleep) -> None:
-        https_get.side_effect = [URLError("temporary"), "成功".encode()]
+    @patch("telegram_cngov.pipeline.urlopen")
+    def test_transient_failure_is_retried(self, urlopen, _sleep) -> None:
+        urlopen.side_effect = [URLError("temporary"), FakeResponse("成功".encode())]
         self.assertEqual(download_text("https://example.invalid/file"), "成功")
-        self.assertEqual(https_get.call_count, 2)
+        self.assertEqual(urlopen.call_count, 2)
 
     @patch("telegram_cngov.pipeline.sleep")
-    @patch("telegram_cngov.pipeline._https_get", side_effect=URLError("down"))
-    def test_exhausted_download_fails(self, https_get, _sleep) -> None:
+    @patch("telegram_cngov.pipeline.urlopen", side_effect=URLError("down"))
+    def test_exhausted_download_fails(self, urlopen, _sleep) -> None:
         with self.assertRaisesRegex(PipelineError, "download failed"):
             download_text("https://example.invalid/file")
-        self.assertEqual(https_get.call_count, 3)
+        self.assertEqual(urlopen.call_count, 3)
 
-    @patch("telegram_cngov.pipeline._https_get", return_value=b"")
-    def test_empty_download_fails(self, _https_get) -> None:
+    @patch("telegram_cngov.pipeline.urlopen", return_value=FakeResponse(b""))
+    def test_empty_download_fails(self, _urlopen) -> None:
         with self.assertRaisesRegex(PipelineError, "empty response"):
             download_text("https://example.invalid/file", attempts=1)
 
-    def test_unsupported_emoji_export_is_excluded(self) -> None:
+    @patch(
+        "telegram_cngov.pipeline.urlopen",
+        return_value=FakeResponse(b"ok", "http://example.invalid/file"),
+    )
+    def test_downgrade_to_http_is_rejected(self, _urlopen) -> None:
+        with self.assertRaisesRegex(PipelineError, "only HTTPS"):
+            download_text("https://example.invalid/file", attempts=1)
+
+    def test_all_platforms_are_expected(self) -> None:
         self.assertEqual(len(PLATFORMS), 8)
-        self.assertNotIn("emoji.strings", FINAL_FILENAMES)
+        self.assertEqual(len(FINAL_FILENAMES), 8)
 
     def test_html_export_is_rejected(self) -> None:
         with self.assertRaisesRegex(PipelineError, "returned HTML"):
             validate_export(PLATFORMS[0], "<!DOCTYPE html><html></html>")
 
 
-class PolishTests(unittest.TestCase):
-    def polish(self, text: str) -> str:
+class RuleTests(unittest.TestCase):
+    def test_labels_only_rewrite_whole_values(self) -> None:
+        text = (
+            '"LanguageName" = "简体中文";\n'
+            '"Continue" = "使用简体中文继续";\n'
+            '<string name="language_code">zh_hans</string>\n'
+        )
+        self.assertEqual(
+            replace_labels(text, RULES.labels),
+            '"LanguageName" = "繁体中文(大陆)";\n'
+            '"Continue" = "使用简体中文继续";\n'
+            '<string name="language_code">zh_hant_cn</string>\n',
+        )
+
+    def test_labels_of_other_languages_are_kept(self) -> None:
+        text = (
+            '"Translate.Language.Chinese_Simplified" = "简体中文";\n'
+            '<string name="Language.zh-CN">简体中文</string>\n'
+        )
+        self.assertEqual(replace_labels(text, RULES.labels), text)
+
+    def test_corrections_are_applied_in_order(self) -> None:
+        self.assertEqual(
+            apply_rules("並迴帳號", RULES.replacements),
+            "并回賬號",
+        )
+
+    def test_invalid_rules_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name in FINAL_FILENAMES:
-                (root / name).write_text(text, encoding="utf-8")
+            path = Path(directory) / "rules.yml"
+            path.write_text("labels: [foo]\n", encoding="utf-8")
+            with self.assertRaisesRegex(PipelineError, "labels must be a mapping"):
+                load_rules(path)
+            path.write_text("- item\n", encoding="utf-8")
+            with self.assertRaisesRegex(PipelineError, "must be a YAML mapping"):
+                load_rules(path)
 
-            polish_outputs(root)
 
-            results = {
-                (root / name).read_text(encoding="utf-8") for name in FINAL_FILENAMES
-            }
-        self.assertEqual(len(results), 1)
-        return results.pop()
+class QuoteTests(unittest.TestCase):
+    def polish(self, text: str) -> str:
+        return repair_quotes(apply_rules(text, RULES.replacements))
 
     def test_same_direction_corner_quotes_are_paired(self) -> None:
         for malformed, expected in (
@@ -83,6 +144,9 @@ class PolishTests(unittest.TestCase):
             "點擊 『AI』> 『%s』。",
         )
 
+    def test_curly_quotes_become_corner_quotes(self) -> None:
+        self.assertEqual(self.polish("提示詞“示例”"), "提示詞「示例」")
+
     def test_balanced_nested_quotes_are_unchanged(self) -> None:
         text = "提示詞「使用『喲呵』、『老夥計』等詞語」"
         self.assertEqual(self.polish(text), text)
@@ -90,6 +154,22 @@ class PolishTests(unittest.TestCase):
     def test_english_apostrophes_are_not_quotes(self) -> None:
         text = "Monday’s test doesn’t work; Seller’s share."
         self.assertEqual(self.polish(text), text)
+
+    def test_escaped_ascii_quote_is_closed_with_a_corner_quote(self) -> None:
+        self.assertEqual(
+            self.polish('爲我和「%@\\"删除'),
+            "爲我和「%@」删除",
+        )
+        self.assertEqual(
+            self.polish('話題重命名爲 」%1$@\\"'),
+            "話題重命名爲 「%1$@」",
+        )
+
+    def test_upstream_apostrophe_typo_is_repaired(self) -> None:
+        self.assertEqual(
+            self.polish("\\'今天\\' HH:mm ‘發送\\'"),
+            "\\'今天\\' HH:mm \\'發送\\'",
+        )
 
 
 class ArchiveTests(unittest.TestCase):
@@ -128,8 +208,10 @@ class ArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config, actual_sha = download_t2gov(Path(directory))
 
-        self.assertEqual(actual_sha, commit_sha)
-        self.assertEqual(config.name, "t2gov.json")
+            self.assertEqual(actual_sha, commit_sha)
+            self.assertEqual(config.name, "t2gov.json")
+            self.assertTrue(config.is_file())
+
         self.assertIn("commits/main.atom", download_text.call_args.args[0])
 
 
@@ -178,20 +260,26 @@ class OutputTests(unittest.TestCase):
             output = root / "dist"
             output.mkdir()
             (output / "sentinel").write_text("old", encoding="utf-8")
-            with self.assertRaisesRegex(PipelineError, "missing output"):
+            with self.assertRaisesRegex(PipelineError, "missing files"):
                 publish_outputs(source, output)
             self.assertTrue((output / "sentinel").exists())
 
-    def test_zip_is_reproducible_and_hashes_cover_final_files(self) -> None:
+    def test_archive_is_reproducible_and_checksums_cover_everything(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             outputs = root / "outputs"
             self.populate(outputs)
-            first = root / "first.zip"
-            second = root / "second.zip"
-            create_deterministic_zip(outputs, first)
-            create_deterministic_zip(outputs, second)
-            self.assertEqual(first.read_bytes(), second.read_bytes())
+            first = create_archive(outputs)
+            original = first.read_bytes()
+            first.unlink()
+            second = create_archive(outputs)
+            self.assertEqual(original, second.read_bytes())
+
+            checksums = write_checksums(outputs, second)
+            names = {
+                line.split("  ", 1)[1] for line in checksums.read_text().splitlines()
+            }
+            self.assertEqual(names, set(FINAL_FILENAMES) | {ARCHIVE_NAME})
             self.assertEqual(set(final_hashes(outputs)), set(FINAL_FILENAMES))
 
 

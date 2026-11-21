@@ -1,3 +1,9 @@
+"""Convert Telegram zh-Hans exports to zh-Hant-CN.
+
+Conversion itself is standard OpenCC: ``s2t`` followed by the latest ``t2gov``
+configuration. Project-specific corrections live in ``rules.yml``.
+"""
+
 from __future__ import annotations
 
 import re
@@ -6,28 +12,27 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
-from http.client import HTTPException, HTTPSConnection
+from http.client import HTTPException
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from subprocess import CalledProcessError, run
 from time import sleep
+from typing import Any
 from urllib.error import URLError
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
-from .rules import (
-    S2T_RULES,
-    T2GOV_RULES,
-    Rules,
-    apply_label_rules,
-    apply_polish_rules,
-    apply_rules,
-)
+import yaml
 
 T2GOV_REPOSITORY = (
     "TerryTian-tech/"
     "OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards"
 )
+T2GOV_CONFIG = "t2gov.json"
+ARCHIVE_NAME = "telegram-zh-Hant-CN.zip"
+CHECKSUMS_NAME = "SHA256SUMS"
+USER_AGENT = "telegram-cngov/0.1"
 
 
 @dataclass(frozen=True)
@@ -75,64 +80,135 @@ PLATFORMS = (
 )
 FINAL_FILENAMES = tuple(sorted(platform.filename for platform in PLATFORMS))
 
+Rule = tuple[str, str]
+
 
 @dataclass(frozen=True)
-class StagePaths:
-    source: Path
-    labelled: Path
-    s2t: Path
-    output: Path
+class Rules:
+    labels: tuple[Rule, ...] = ()
+    replacements: tuple[Rule, ...] = ()
 
 
 @dataclass(frozen=True)
 class BuildResult:
+    output: Path
     files: tuple[Path, ...]
-    t2gov_sha: str | None
+    t2gov_sha: str
 
 
 class PipelineError(RuntimeError):
-    """A conversion stage could not complete safely."""
+    """A conversion step could not complete safely."""
 
 
-def _https_get(url: str, timeout: float, redirects: int = 5) -> bytes:
-    current = url
-    for _ in range(redirects + 1):
-        parsed = urlsplit(current)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise PipelineError(f"only HTTPS downloads are allowed: {current}")
-        path = parsed.path or "/"
-        if parsed.query:
-            path = f"{path}?{parsed.query}"
-        connection = HTTPSConnection(parsed.hostname, parsed.port, timeout=timeout)
-        try:
-            connection.request(
-                "GET", path, headers={"User-Agent": "telegram-cngov/0.1"}
-            )
-            response = connection.getresponse()
-            if response.status in {301, 302, 303, 307, 308}:
-                location = response.getheader("Location")
-                if not location:
-                    raise URLError(f"redirect without Location from {current}")
-                current = urljoin(current, location)
-                continue
-            if response.status >= 400:
-                raise URLError(f"HTTP {response.status} from {current}")
-            return response.read()
-        finally:
-            connection.close()
-    raise URLError(f"too many redirects from {url}")
+def _pairs(value: Any, name: str, path: Path) -> tuple[Rule, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise PipelineError(f"{path}: {name} must be a mapping")
+    pairs: list[Rule] = []
+    for old, new in value.items():
+        if not isinstance(old, str) or not isinstance(new, str) or not old:
+            raise PipelineError(f"{path}: invalid {name} entry: {old!r}: {new!r}")
+        pairs.append((old, new))
+    return tuple(pairs)
+
+
+def load_rules(path: Path) -> Rules:
+    """Read the user-maintained corrections from a YAML mapping."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as error:
+        raise PipelineError(f"could not read rules from {path}") from error
+    if not isinstance(data, dict):
+        raise PipelineError(f"{path}: rules must be a YAML mapping")
+    return Rules(
+        labels=_pairs(data.get("labels"), "labels", path),
+        replacements=_pairs(data.get("replacements"), "replacements", path),
+    )
+
+
+# Entries that name some other language must keep their own label.
+FOREIGN_LABEL_KEY = re.compile(
+    r'^\s*(?:<string\s+name="?|")'
+    r"(?:Language\.[a-z]{2,3}(?:-[A-Za-z]{2,4})?"
+    r"|Translate\.Language|Translation\.Language|TranslateLanguage)"
+)
+
+
+def replace_labels(text: str, labels: tuple[Rule, ...]) -> str:
+    """Rename the pack, but only where a translation value is the label."""
+    lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        if FOREIGN_LABEL_KEY.match(line) is None:
+            for old, new in labels:
+                line = line.replace(f'"{old}"', f'"{new}"')
+                line = line.replace(f">{old}<", f">{new}<")
+        lines.append(line)
+    return "".join(lines)
+
+
+def apply_rules(text: str, rules: tuple[Rule, ...]) -> str:
+    for old, new in rules:
+        text = text.replace(old, new)
+    return text
+
+
+OPENING_QUOTES = {"「": "」", "『": "』"}
+CLOSING_QUOTES = {close: opening for opening, close in OPENING_QUOTES.items()}
+# Upstream .strings values occasionally close a corner quote with an escaped
+# ASCII quote, for example: "We delete messages for「%@\" from this chat".
+ESCAPED_QUOTE = re.compile(r'([「」])([^「」\n]*?)\\"')
+# A straight-closing quote between ASCII letters is an English apostrophe.
+APOSTROPHE = re.compile(r"(?<![A-Za-z])’|’(?![A-Za-z])")
+
+
+def _pair_quotes(line: str) -> str:
+    output: list[str] = []
+    stack: list[str] = []
+    for index, char in enumerate(line):
+        if char in OPENING_QUOTES:
+            if stack and stack[-1] == char:
+                output.append(OPENING_QUOTES[char])
+                stack.pop()
+            else:
+                output.append(char)
+                stack.append(char)
+        elif char in CLOSING_QUOTES:
+            opening = CLOSING_QUOTES[char]
+            if stack and stack[-1] == opening:
+                output.append(char)
+                stack.pop()
+            elif any(quote in (opening, char) for quote in line[index + 1 :]):
+                output.append(opening)
+                stack.append(opening)
+            else:
+                output.append(char)
+        else:
+            output.append(char)
+    return "".join(output)
+
+
+def repair_quotes(text: str) -> str:
+    """Close corner quotes that upstream opened or reversed incorrectly."""
+    text = ESCAPED_QUOTE.sub(r"「\2」", text)
+    text = APOSTROPHE.sub("』", text)
+    return "".join(_pair_quotes(line) for line in text.splitlines(keepends=True))
 
 
 def download_bytes(url: str, *, attempts: int = 3, timeout: float = 180) -> bytes:
     for attempt in range(1, attempts + 1):
         try:
-            payload = _https_get(url, timeout)
+            request = Request(url, headers={"User-Agent": USER_AGENT})
+            with urlopen(request, timeout=timeout) as response:
+                if urlsplit(response.url).scheme != "https":
+                    raise PipelineError(f"only HTTPS downloads are allowed: {url}")
+                payload = response.read()
             if not payload:
                 raise PipelineError(f"empty response from {url}")
             return payload
         except PipelineError:
             raise
-        except (HTTPException, OSError, URLError, TimeoutError) as error:
+        except (HTTPException, OSError, URLError) as error:
             if attempt == attempts:
                 raise PipelineError(
                     f"download failed after {attempts} attempts: {url}"
@@ -142,9 +218,8 @@ def download_bytes(url: str, *, attempts: int = 3, timeout: float = 180) -> byte
 
 
 def download_text(url: str, *, attempts: int = 3, timeout: float = 180) -> str:
-    payload = download_bytes(url, attempts=attempts, timeout=timeout)
     try:
-        return payload.decode("utf-8")
+        return download_bytes(url, attempts=attempts, timeout=timeout).decode("utf-8")
     except UnicodeDecodeError as error:
         raise PipelineError(f"response from {url} is not UTF-8") from error
 
@@ -168,20 +243,23 @@ def _write_text(path: Path, text: str) -> None:
         file.write(text)
 
 
-def download_sources(destination: Path) -> tuple[Path, ...]:
+def _require_files(directory: Path) -> None:
+    missing = [name for name in FINAL_FILENAMES if not (directory / name).is_file()]
+    if missing:
+        raise PipelineError(f"missing files in {directory}: {', '.join(missing)}")
+
+
+def download_sources(destination: Path, labels: tuple[Rule, ...]) -> None:
     destination.mkdir(parents=True, exist_ok=True)
 
-    def download(platform: Platform) -> Path:
+    def fetch(platform: Platform) -> None:
         text = download_text(platform.url)
         validate_export(platform, text)
-        path = destination / platform.filename
-        _write_text(path, text)
-        return path
+        _write_text(destination / platform.filename, replace_labels(text, labels))
 
     with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as executor:
-        files = tuple(executor.map(download, PLATFORMS))
+        tuple(executor.map(fetch, PLATFORMS))
     _require_files(destination)
-    return files
 
 
 def safe_extract_zip(data: bytes, destination: Path) -> None:
@@ -201,27 +279,25 @@ def safe_extract_zip(data: bytes, destination: Path) -> None:
 
 
 def download_t2gov(destination: Path) -> tuple[Path, str]:
-    feed_url = f"https://github.com/{T2GOV_REPOSITORY}/commits/main.atom"
-    match = re.search(
-        r"<id>tag:github\.com,2008:Grit::Commit/([0-9a-f]{40})</id>",
-        download_text(feed_url),
-    )
+    """Fetch the newest t2gov commit and return its OpenCC config."""
+    feed = download_text(f"https://github.com/{T2GOV_REPOSITORY}/commits/main.atom")
+    match = re.search(r"Grit::Commit/([0-9a-f]{40})", feed)
     if match is None:
         raise PipelineError("invalid t2gov commit feed")
     commit_sha = match.group(1)
-    try:
-        int(commit_sha, 16)
-    except ValueError as error:
-        raise PipelineError("invalid t2gov commit SHA") from error
 
-    archive_url = f"https://github.com/{T2GOV_REPOSITORY}/archive/{commit_sha}.zip"
-    safe_extract_zip(download_bytes(archive_url), destination)
+    safe_extract_zip(
+        download_bytes(
+            f"https://github.com/{T2GOV_REPOSITORY}/archive/{commit_sha}.zip"
+        ),
+        destination,
+    )
     roots = [path for path in destination.iterdir() if path.is_dir()]
     if len(roots) != 1:
         raise PipelineError("unexpected t2gov archive layout")
-    config = roots[0] / "t2gov" / "t2gov.json"
+    config = roots[0] / "t2gov" / T2GOV_CONFIG
     for name in (
-        "t2gov.json",
+        T2GOV_CONFIG,
         "CJK_Compatibility_Ideographs.txt",
         "TGPhrases.txt",
         "TGCharacters.txt",
@@ -229,33 +305,6 @@ def download_t2gov(destination: Path) -> tuple[Path, str]:
         if not (config.parent / name).is_file():
             raise PipelineError(f"t2gov archive is missing {name}")
     return config, commit_sha
-
-
-def stage_paths(root: Path) -> StagePaths:
-    return StagePaths(
-        root / "01-source-zh-Hans",
-        root / "02-labels-replaced",
-        root / "03-s2t-standard-Hant",
-        root / "04-output-zh-Hant-CN",
-    )
-
-
-def _require_files(directory: Path) -> None:
-    missing = [name for name in FINAL_FILENAMES if not (directory / name).is_file()]
-    if missing:
-        raise PipelineError(
-            f"missing output files in {directory}: {', '.join(missing)}"
-        )
-
-
-def replace_language_labels(source: Path, destination: Path) -> None:
-    _require_files(source)
-    destination.mkdir(parents=True, exist_ok=True)
-    for platform in PLATFORMS:
-        _write_text(
-            destination / platform.filename,
-            apply_label_rules(_read_text(source / platform.filename)),
-        )
 
 
 def run_opencc(source: Path, destination: Path, config: str | Path) -> None:
@@ -275,22 +324,19 @@ def run_opencc(source: Path, destination: Path, config: str | Path) -> None:
         raise PipelineError(f"OpenCC produced no output for {source.name}")
 
 
-def opencc_directory(
-    source: Path, destination: Path, config: str | Path, rules: Rules
-) -> None:
+def opencc_directory(source: Path, destination: Path, config: str | Path) -> None:
     _require_files(source)
     destination.mkdir(parents=True, exist_ok=True)
-    for platform in PLATFORMS:
-        output = destination / platform.filename
-        run_opencc(source / platform.filename, output, config)
-        _write_text(output, apply_rules(_read_text(output), rules))
-
-
-def polish_outputs(directory: Path) -> None:
-    _require_files(directory)
     for name in FINAL_FILENAMES:
-        path = directory / name
-        _write_text(path, apply_polish_rules(_read_text(path)))
+        run_opencc(source / name, destination / name, config)
+
+
+def convert_directory(source: Path, destination: Path, rules: Rules) -> None:
+    _require_files(source)
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in FINAL_FILENAMES:
+        text = apply_rules(_read_text(source / name), rules.replacements)
+        _write_text(destination / name, repair_quotes(text))
 
 
 def _restore_backup(backup: Path | None, output: Path) -> None:
@@ -326,42 +372,6 @@ def publish_outputs(source: Path, output: Path) -> tuple[Path, ...]:
     return tuple(output / name for name in FINAL_FILENAMES)
 
 
-def _run_in_workspace(root: Path, output: Path, from_step: int) -> BuildResult:
-    paths = stage_paths(root)
-    t2gov_sha: str | None = None
-
-    if from_step <= 1:
-        download_sources(paths.source)
-    if from_step <= 2:
-        replace_language_labels(paths.source, paths.labelled)
-    if from_step <= 3:
-        opencc_directory(paths.labelled, paths.s2t, "s2t", S2T_RULES)
-    if from_step <= 4:
-        config, t2gov_sha = download_t2gov(root / ".t2gov")
-        opencc_directory(paths.s2t, paths.output, config, T2GOV_RULES)
-    if from_step <= 5:
-        polish_outputs(paths.output)
-
-    return BuildResult(publish_outputs(paths.output, output), t2gov_sha)
-
-
-def run_pipeline(
-    output: Path,
-    *,
-    work_dir: Path | None = None,
-    from_step: int = 1,
-) -> BuildResult:
-    if from_step not in range(1, 6):
-        raise PipelineError("--from must be between 1 and 5")
-    if from_step > 1 and work_dir is None:
-        raise PipelineError("--from greater than 1 requires --work-dir")
-    if work_dir is not None:
-        work_dir.mkdir(parents=True, exist_ok=True)
-        return _run_in_workspace(work_dir, output, from_step)
-    with tempfile.TemporaryDirectory(prefix="telegram-cngov-") as temporary:
-        return _run_in_workspace(Path(temporary), output, from_step)
-
-
 def sha256_file(path: Path) -> str:
     digest = sha256()
     with path.open("rb") as file:
@@ -375,26 +385,68 @@ def final_hashes(directory: Path) -> dict[str, str]:
     return {name: sha256_file(directory / name) for name in FINAL_FILENAMES}
 
 
-def create_deterministic_zip(directory: Path, destination: Path) -> None:
+def create_archive(directory: Path) -> Path:
     _require_files(directory)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with ZipFile(destination, "w") as archive:
+    archive = directory / ARCHIVE_NAME
+    with ZipFile(archive, "w") as output:
         for name in FINAL_FILENAMES:
             info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            archive.writestr(
+            output.writestr(
                 info,
                 (directory / name).read_bytes(),
                 compress_type=ZIP_DEFLATED,
                 compresslevel=9,
             )
+    return archive
 
 
-def write_checksums(directory: Path, archive: Path, destination: Path) -> None:
+def write_checksums(directory: Path, archive: Path) -> Path:
     checksums = final_hashes(directory)
     checksums[archive.name] = sha256_file(archive)
+    destination = directory / CHECKSUMS_NAME
     destination.write_text(
         "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())),
         encoding="utf-8",
     )
+    return destination
+
+
+def _prepare(directory: Path) -> Path:
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    return directory
+
+
+def _build(root: Path, output: Path, rules: Rules) -> BuildResult:
+    source = _prepare(root / "source")
+    hant = _prepare(root / "hant")
+    gov = _prepare(root / "gov")
+    staging = _prepare(root / "staging")
+
+    download_sources(source, rules.labels)
+    opencc_directory(source, hant, "s2t")
+    config, t2gov_sha = download_t2gov(_prepare(root / "t2gov"))
+    opencc_directory(hant, gov, config)
+    convert_directory(gov, staging, rules)
+
+    files = publish_outputs(staging, output)
+    write_checksums(output, create_archive(output))
+    return BuildResult(output.resolve(), files, t2gov_sha)
+
+
+def build(
+    output: Path,
+    *,
+    work_dir: Path | None = None,
+    rules: Path = Path("rules.yml"),
+) -> BuildResult:
+    """Run the whole conversion and publish the result to ``output``."""
+    loaded = load_rules(rules)
+    if work_dir is not None:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        return _build(work_dir, output, loaded)
+    with tempfile.TemporaryDirectory(prefix="telegram-cngov-") as temporary:
+        return _build(Path(temporary), output, loaded)

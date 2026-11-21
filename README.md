@@ -2,20 +2,27 @@
 
 **Apply the language pack in Telegram:** [t.me/setlanguage/chinese-traditional-mainland](https://t.me/setlanguage/chinese-traditional-mainland)
 
-Python pipeline for converting Telegram's Simplified Chinese (`zh-Hans`) translation exports into **Traditional Chinese with PRC-standard glyphs** (`zh-Hant-CN`).
+Converts Telegram's Simplified Chinese (`zh-Hans`) translation exports into
+**Traditional Chinese with PRC-standard glyphs** (`zh-Hant-CN`).
 
-## Pipeline
+## How it works
 
-1. Download exports for Android, iOS, Telegram Desktop, macOS, Android X, Web K, Web A, and Unigram.
-2. Replace language labels and tags before conversion.
-3. Convert Simplified Chinese to standard Traditional Chinese with OpenCC `s2t`.
-4. Apply the latest [`t2gov`](https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards) rules.
-5. Apply project corrections and typography rules.
+1. Download the Android, iOS, Telegram Desktop, macOS, Android X, Web K, Web A,
+   and Unigram exports.
+2. Rename the language-pack labels listed in [`rules.yml`](rules.yml).
+3. Run OpenCC `s2t`.
+4. Run the latest [`t2gov`](https://github.com/TerryTian-tech/OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards)
+   OpenCC configuration.
+5. Apply the project corrections in `rules.yml` and repair malformed corner
+   quotes.
+
+The output directory contains the eight platform files, a deterministic ZIP
+archive, and `SHA256SUMS`.
 
 ## Requirements
 
 - Python 3.11 or newer
-- Official [OpenCC](https://github.com/BYVoid/OpenCC) CLI
+- The official [OpenCC](https://github.com/BYVoid/OpenCC) `opencc` CLI
 
 ```console
 # macOS
@@ -25,52 +32,45 @@ brew install opencc
 sudo apt-get install opencc
 ```
 
-## Installation
-
-```console
-python -m pip install --editable .
-```
-
 ## Usage
 
 ```console
-# Full conversion; intermediate stages are deleted automatically
+python -m pip install --editable .
 telegram-cngov
-
-# Select the final output directory
-telegram-cngov --output dist
-
-# Keep intermediate stages for inspection
-telegram-cngov --work-dir .work
-
-# Resume from a retained stage
-telegram-cngov --work-dir .work --from 3
 ```
 
-The final directory contains eight platform files. `--from` accepts stages 1–5 and requires `--work-dir`.
-
-## Development
+Options:
 
 ```console
-python -m unittest discover -s tests -v
-python -m compileall -q telegram_cngov scripts tests
+telegram-cngov --output dist          # output directory (default: dist)
+telegram-cngov --rules rules.yml      # corrections file (default: rules.yml)
+telegram-cngov --work-dir .work       # keep intermediate conversions
 ```
+
+## Rules
+
+`rules.yml` contains only project-specific corrections. Everything OpenCC can
+do is left to OpenCC.
+
+- `labels` — whole translation values that name the language pack. Only a value
+  that is exactly the label is rewritten, so sentences that mention
+  "简体中文" are converted normally.
+- `replacements` — ordered literal corrections applied after conversion.
+  These cover mainland usage and upstream typos that the government standard
+  does not handle.
+
+`rules.yml` is read from the current directory by default; pass `--rules` to
+use another file.
 
 ## Automation
 
-CI validates pushes and pull requests. The update workflow runs at 03:00 UTC on calendar days **1, 6, 11, 16, 21, 26, and 31**, and can also be started manually. Month boundaries are therefore not always exactly 120 hours apart.
-
-When the eight generated files differ from the latest published checksums, the workflow creates a date-tagged Release (`vYYYY.MM.DD`) containing:
-
-- all eight translation files;
-- a deterministic ZIP archive;
-- `SHA256SUMS`.
-
-If the files are unchanged, no tag or Release is created. Generated translations are never committed to `main`.
+CI runs the tests. The build workflow runs daily and can be started manually;
+it converts the latest exports and publishes a `vYYYY.MM.DD` release.
 
 ## Language tag
 
-`zh-Hant-CN` is an [IANA-registered](https://www.iana.org/assignments/lang-tag-apps/zh-Hant-CN) BCP 47 tag (registered 2005-04-26) meaning Chinese written in Traditional script for the PRC mainland region. `Hans` and `Hant` are script subtags; `CN` is the region subtag.
+`zh-Hant-CN` is an [IANA-registered](https://www.iana.org/assignments/language-subtag-registry)
+BCP 47 tag: Chinese in Traditional script, PRC mainland region.
 
 ## Licence
 

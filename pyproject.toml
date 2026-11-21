@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-cngov"
-version = "0.1.0"
+version = "1.0.0"
 description = "Convert Telegram zh-Hans translations to zh-Hant-CN"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "soizo" }]
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 telegram-cngov = "telegram_cngov.__main__:main"
