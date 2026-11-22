@@ -12,14 +12,21 @@ from zipfile import ZipFile
 
 from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
     FINAL_FILENAMES,
+    IMPORT_FILENAMES,
     PLATFORMS,
+    PLURAL_QUANTITIES,
     PipelineError,
+    Platform,
     apply_rules,
     archive_name,
     create_archive,
+    create_import_archive,
     download_t2gov,
     download_text,
     final_hashes,
+    flatten_plural_keys,
+    import_archive_name,
+    import_filename,
     load_rules,
     publish_outputs,
     repair_quotes,
@@ -137,6 +144,110 @@ class RuleTests(unittest.TestCase):
             path.write_text("- item\n", encoding="utf-8")
             with self.assertRaisesRegex(PipelineError, "must be a YAML mapping"):
                 load_rules(path)
+
+
+class PluralTests(unittest.TestCase):
+    ANDROID = Platform(
+        "android",
+        "https://example.invalid/android",
+        "android.xml",
+    )
+
+    def test_android_plurals_collapse_to_the_base_key(self) -> None:
+        text = (
+            '<resources>\n'
+            '    <string name="PeopleJoined_one">一人</string>\n'
+            '    <string name="PeopleJoined_other">多人</string>\n'
+            '    <string name="Missing">未翻译</string>\n'
+            '  <string name="PeopleJoined_zero">零人</string>\n'
+            '  <string name="PeopleJoined_two">两人</string>\n'
+            '  <string name="PeopleJoined_few">几人</string>\n'
+            '  <string name="PeopleJoined_many">多人</string>\n'
+            '</resources>\n'
+        )
+        self.assertEqual(
+            flatten_plural_keys(text, self.ANDROID),
+            '<resources>\n'
+            '    <string name="PeopleJoined">多人</string>\n'
+            '    <string name="Missing">未翻译</string>\n'
+            '</resources>\n',
+        )
+
+    def test_tdesktop_hash_plurals_collapse_to_the_base_key(self) -> None:
+        platform = Platform(
+            "tdesktop",
+            "https://example.invalid/tdesktop",
+            "tdesktop.strings",
+            plural_delimiter="#",
+        )
+        text = (
+            '"lng_proxy_selected#other" = "已選擇 {count} 個代理";\n'
+            '"lng_story_privacy_except_one" = "除 {user} 外";\n'
+        )
+        self.assertEqual(
+            flatten_plural_keys(text, platform),
+            '"lng_proxy_selected" = "已選擇 {count} 個代理";\n'
+            '"lng_story_privacy_except_one" = "除 {user} 外";\n',
+        )
+
+    def test_apple_any_plural_collapses_to_the_base_key(self) -> None:
+        platform = Platform(
+            "ios",
+            "https://example.invalid/ios",
+            "ios.strings",
+            plural_quantities=("any",),
+            preferred_plural=("any",),
+        )
+        text = '"PUSH_MESSAGE_FWDS_TEXT_any" = "%@ forwarded messages";\n'
+        self.assertEqual(
+            flatten_plural_keys(text, platform),
+            '"PUSH_MESSAGE_FWDS_TEXT" = "%@ forwarded messages";\n',
+        )
+
+    def test_duplicate_plural_forms_keep_the_chinese_value(self) -> None:
+        platform = Platform(
+            "ios",
+            "https://example.invalid/ios",
+            "ios.strings",
+            plural_quantities=("any",),
+            preferred_plural=("any",),
+        )
+        text = (
+            '"ProfileLevelInfo.Points_any" = "English value";\n'
+            '"Other" = "其他";\n'
+            '"ProfileLevelInfo.Points_any" = "中文值";\n'
+        )
+        result = flatten_plural_keys(text, platform)
+        self.assertIn('"ProfileLevelInfo.Points" = "中文值";', result)
+        self.assertIn('"Other" = "其他";', result)
+        self.assertNotIn("_any", result)
+        self.assertNotIn("English value", result)
+
+    def test_duplicate_plain_keys_keep_the_chinese_value(self) -> None:
+        platform = Platform(
+            "ios",
+            "https://example.invalid/ios",
+            "ios.strings",
+            plural_quantities=("any",),
+            preferred_plural=("any",),
+        )
+        text = (
+            '"ProfileLevelInfo.MyDescriptionPreview" = "English";\n'
+            '"ProfileLevelInfo.MyDescriptionPreview" = "中文";\n'
+        )
+        self.assertEqual(
+            flatten_plural_keys(text, platform),
+            '"ProfileLevelInfo.MyDescriptionPreview" = "中文";\n',
+        )
+
+    def test_import_filenames_keep_the_extension(self) -> None:
+        self.assertEqual(import_filename("android.xml"), "android-import.xml")
+        self.assertEqual(import_filename("ios.strings"), "ios-import.strings")
+        self.assertEqual(len(IMPORT_FILENAMES), len(FINAL_FILENAMES))
+        self.assertEqual(
+            set(PLURAL_QUANTITIES),
+            {"zero", "one", "two", "few", "many", "other", "any"},
+        )
 
 
 class QuoteTests(unittest.TestCase):
@@ -264,7 +375,7 @@ class OpenCCTests(unittest.TestCase):
 class OutputTests(unittest.TestCase):
     def populate(self, directory: Path) -> None:
         directory.mkdir()
-        for name in FINAL_FILENAMES:
+        for name in FINAL_FILENAMES + IMPORT_FILENAMES:
             (directory / name).write_text(f"content:{name}\n", encoding="utf-8")
 
     def test_incomplete_source_does_not_replace_existing_output(self) -> None:
@@ -291,22 +402,42 @@ class OutputTests(unittest.TestCase):
             second = create_archive(outputs, "v2026.11.22")
             self.assertEqual(original, second.read_bytes())
 
-            checksums = write_checksums(outputs, second)
+            import_archive = create_import_archive(outputs, "v2026.11.22")
+            self.assertEqual(
+                import_archive.name, "telegram-zh-hant-cn-v2026.11.22-import.zip"
+            )
+            with ZipFile(import_archive) as archive:
+                self.assertEqual(set(archive.namelist()), set(IMPORT_FILENAMES))
+
+            checksums = write_checksums(outputs, second, import_archive)
             names = {
                 line.split("  ", 1)[1] for line in checksums.read_text().splitlines()
             }
             self.assertEqual(
                 names,
-                set(FINAL_FILENAMES) | {"telegram-zh-hant-cn-v2026.11.22.zip"},
+                set(FINAL_FILENAMES)
+                | set(IMPORT_FILENAMES)
+                | {
+                    "telegram-zh-hant-cn-v2026.11.22.zip",
+                    "telegram-zh-hant-cn-v2026.11.22-import.zip",
+                },
             )
-            self.assertEqual(set(final_hashes(outputs)), set(FINAL_FILENAMES))
+            self.assertEqual(
+                set(final_hashes(outputs)), set(FINAL_FILENAMES) | set(IMPORT_FILENAMES)
+            )
 
     def test_archive_name_embeds_tag_and_rejects_unsafe_tags(self) -> None:
         self.assertEqual(
             archive_name("v2026.11.22"), "telegram-zh-hant-cn-v2026.11.22.zip"
         )
+        self.assertEqual(
+            import_archive_name("v2026.11.22"),
+            "telegram-zh-hant-cn-v2026.11.22-import.zip",
+        )
         with self.assertRaisesRegex(PipelineError, "invalid tag"):
             archive_name("../escape")
+        with self.assertRaisesRegex(PipelineError, "invalid tag"):
+            import_archive_name("../escape")
 
 
 if __name__ == "__main__":

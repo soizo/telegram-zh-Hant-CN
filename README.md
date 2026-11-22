@@ -16,8 +16,22 @@ Converts Telegram's Simplified Chinese (`zh-Hans`) translation exports into
 5. Apply the project corrections in `rules.yml` and repair malformed corner
    quotes.
 
-The output directory contains the eight platform files, a deterministic ZIP
-archive, and `SHA256SUMS`.
+The output directory contains the eight platform files, the matching
+`*-import.*` files for the translation platform's importer, two deterministic
+ZIP archives, and `SHA256SUMS`.
+
+## Import files
+
+The translation platform's importer only understands plain keys. It does not
+read the plural forms used by the apps (`Key_other` on Android and the web,
+`Key#other` on Telegram Desktop, `Key_any` on iOS/macOS), so uploading a normal
+platform file previews every plural as `<no value>`.
+
+For that reason every build also writes a flattened `*-import.*` copy of each
+platform file and a `telegram-zh-hant-cn-<tag>-import.zip`. In these copies each
+plural key is reduced to its base key with the Chinese value, which is enough
+because Chinese has a single plural form. Use the import files only on
+translations.telegram.org; install the normal files in the clients.
 
 ## Standard
 

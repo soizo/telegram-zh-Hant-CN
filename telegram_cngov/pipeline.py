@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import sha256
 from http.client import HTTPException
 from io import BytesIO
@@ -37,11 +37,18 @@ TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_AGENT = "telegram-cngov/0.1"
 
 
+PLURAL_QUANTITIES = ("zero", "one", "two", "few", "many", "other", "any")
+PREFERRED_PLURAL = ("other", "any", "one", "zero", "two", "few", "many")
+
+
 @dataclass(frozen=True)
 class Platform:
     name: str
     url: str
     filename: str
+    plural_delimiter: str = "_"
+    plural_quantities: tuple[str, ...] = PLURAL_QUANTITIES
+    preferred_plural: tuple[str, ...] = PREFERRED_PLURAL
 
 
 PLATFORMS = (
@@ -51,36 +58,60 @@ PLATFORMS = (
         "android.xml",
     ),
     Platform(
-        "ios", "https://translations.telegram.org/zh-hans/ios/export", "ios.strings"
+        "ios",
+        "https://translations.telegram.org/zh-hans/ios/export",
+        "ios.strings",
+        plural_quantities=("any",),
+        preferred_plural=("any",),
     ),
     Platform(
         "tdesktop",
         "https://translations.telegram.org/zh-hans/tdesktop/export",
         "tdesktop.strings",
+        plural_delimiter="#",
     ),
     Platform(
         "macos",
         "https://translations.telegram.org/zh-hans/macos/export",
         "macos.strings",
+        plural_quantities=("other", "any"),
     ),
     Platform(
         "android_x",
         "https://translations.telegram.org/zh-hans/android_x/export",
         "android_x.xml",
+        plural_quantities=("other",),
     ),
     Platform(
-        "webk", "https://translations.telegram.org/zh-hans/webk/export", "webk.strings"
+        "webk",
+        "https://translations.telegram.org/zh-hans/webk/export",
+        "webk.strings",
+        plural_quantities=("other",),
     ),
     Platform(
-        "weba", "https://translations.telegram.org/zh-hans/weba/export", "weba.strings"
+        "weba",
+        "https://translations.telegram.org/zh-hans/weba/export",
+        "weba.strings",
+        plural_quantities=("other",),
     ),
     Platform(
         "unigram",
         "https://translations.telegram.org/zh-hans/unigram/export",
         "unigram.xml",
+        plural_quantities=("other",),
     ),
 )
 FINAL_FILENAMES = tuple(sorted(platform.filename for platform in PLATFORMS))
+
+
+def import_filename(name: str) -> str:
+    """Return the import-friendly filename for a release file."""
+    path = PurePosixPath(name)
+    return f"{path.stem}-import{path.suffix}"
+
+
+IMPORT_FILENAMES = tuple(import_filename(name) for name in FINAL_FILENAMES)
+RELEASE_FILENAMES = FINAL_FILENAMES + IMPORT_FILENAMES
 
 Rule = tuple[str, str]
 
@@ -96,7 +127,9 @@ class Rules:
 class BuildResult:
     output: Path
     files: tuple[Path, ...]
+    import_files: tuple[Path, ...]
     archive: Path
+    import_archive: Path
     t2gov_sha: str
 
 
@@ -160,6 +193,207 @@ def apply_rules(text: str, rules: tuple[Rule, ...]) -> str:
     for old, new in rules:
         text = text.replace(old, new)
     return text
+
+
+# A .strings entry may span lines and may carry a trailing // comment.
+STRINGS_ENTRY = re.compile(
+    r'^"(?P<key>[^"]+)"\s*=\s*"(?P<value>(?:[^"\\]|\\.)*)";[ \t]*(?://[^\n]*)?$',
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _plural_quantities(platform: Platform) -> str:
+    return "|".join(re.escape(quantity) for quantity in platform.plural_quantities)
+
+
+def _choose_plural(
+    items: list[tuple[int, str, str]], platform: Platform
+) -> tuple[int, str, str]:
+    """Pick the value for the target language from all entries of a key."""
+    for quantity in platform.preferred_plural:
+        matches = [item for item in items if item[1] == quantity]
+        if matches:
+            return max(matches, key=lambda item: item[0])
+    return max(items, key=lambda item: item[0])
+
+
+def _apply_actions(
+    text: str, entries: list[re.Match[str]], actions: dict[int, str | None]
+) -> str:
+    pieces: list[str] = []
+    last = 0
+    for index, entry in enumerate(entries):
+        if index not in actions:
+            continue
+        pieces.append(text[last : entry.start()])
+        replacement = actions[index]
+        last = entry.end()
+        if replacement is not None:
+            pieces.append(replacement)
+        elif text.startswith("\n", last):
+            last += 1
+    pieces.append(text[last:])
+    return "".join(pieces)
+
+
+def _flatten_xml_plurals(text: str, platform: Platform) -> str:
+    pattern = re.compile(
+        r'^(?P<indent>\s*)<string name="(?P<base>[^"]+?)'
+        + re.escape(platform.plural_delimiter)
+        + r"(?P<quantity>"
+        + _plural_quantities(platform)
+        + r')"[^>]*>(?P<value>.*?)</string>\s*$',
+        re.DOTALL,
+    )
+    lines = text.splitlines(keepends=True)
+    groups: dict[str, list[tuple[int, str, str, str]]] = {}
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if match is not None:
+            groups.setdefault(match.group("base"), []).append(
+                (
+                    index,
+                    match.group("quantity"),
+                    match.group("indent"),
+                    match.group("value"),
+                )
+            )
+
+    replacements: dict[int, str] = {}
+    removed: set[int] = set()
+    for base, items in groups.items():
+        index, _, value = _choose_plural(
+            [(item[0], item[1], item[3]) for item in items],
+            platform,
+        )
+        indent = next(item[2] for item in items if item[0] == index)
+        newline = "\n" if lines[index].endswith("\n") else ""
+        replacements[index] = f'{indent}<string name="{base}">{value}</string>{newline}'
+        removed.update(item[0] for item in items)
+        removed.discard(index)
+
+    if not replacements:
+        return text
+
+    output: list[str] = []
+    for index, line in enumerate(lines):
+        if index in replacements:
+            output.append(replacements[index])
+        elif index not in removed:
+            output.append(line)
+    return "".join(output)
+
+
+def _flatten_strings_plurals(text: str, platform: Platform) -> str:
+    key_pattern = re.compile(
+        r"^(?P<base>.+)"
+        + re.escape(platform.plural_delimiter)
+        + r"(?P<quantity>"
+        + _plural_quantities(platform)
+        + r")$"
+    )
+    entries = list(STRINGS_ENTRY.finditer(text))
+    groups: dict[str, list[tuple[int, str, str]]] = {}
+    for index, entry in enumerate(entries):
+        key_match = key_pattern.match(entry.group("key"))
+        if key_match is not None:
+            groups.setdefault(key_match.group("base"), []).append(
+                (index, key_match.group("quantity"), entry.group("value"))
+            )
+
+    actions: dict[int, str | None] = {}
+    for base, items in groups.items():
+        chosen, _, value = _choose_plural(items, platform)
+        actions[chosen] = f'"{base}" = "{value}";'
+        for index, _, _ in items:
+            if index != chosen:
+                actions[index] = None
+
+    if not actions:
+        return text
+    return _apply_actions(text, entries, actions)
+
+
+def _has_cjk(value: str) -> bool:
+    return re.search(r"[\u3400-\u9fff]", value) is not None
+
+
+def _dedupe_xml_import(text: str) -> str:
+    pattern = re.compile(
+        r'^(?P<indent>\s*)<string name="(?P<key>[^"]+)"[^>]*>'
+        r"(?P<value>.*?)</string>\s*$",
+        re.DOTALL,
+    )
+    lines = text.splitlines(keepends=True)
+    seen: dict[str, int] = {}
+    replacements: dict[int, str] = {}
+    removed: set[int] = set()
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if match is None:
+            continue
+        key = match.group("key")
+        if key not in seen:
+            seen[key] = index
+            continue
+        previous = pattern.match(lines[seen[key]])
+        assert previous is not None
+        old_value = previous.group("value")
+        new_value = match.group("value")
+        if new_value != old_value and _has_cjk(new_value) and not _has_cjk(old_value):
+            replacements[seen[key]] = (
+                f'{match.group("indent")}<string name="{key}">{new_value}</string>\n'
+            )
+        removed.add(index)
+    output: list[str] = []
+    for index, line in enumerate(lines):
+        if index in replacements:
+            output.append(replacements[index])
+        elif index not in removed:
+            output.append(line)
+    return "".join(output)
+
+
+def _dedupe_strings_import(text: str) -> str:
+    entries = list(STRINGS_ENTRY.finditer(text))
+    seen: dict[str, tuple[int, re.Match[str]]] = {}
+    actions: dict[int, str | None] = {}
+    for index, entry in enumerate(entries):
+        key = entry.group("key")
+        if key not in seen:
+            seen[key] = (index, entry)
+            continue
+        old_index, old_entry = seen[key]
+        new_value = entry.group("value")
+        if new_value != old_entry.group("value") and _has_cjk(new_value) and not _has_cjk(
+            old_entry.group("value")
+        ):
+            actions[old_index] = f'"{key}" = "{new_value}";'
+        actions[index] = None
+    if not actions:
+        return text
+    return _apply_actions(text, entries, actions)
+
+
+def _dedupe_import(text: str, platform: Platform) -> str:
+    if platform.filename.endswith(".xml"):
+        return _dedupe_xml_import(text)
+    return _dedupe_strings_import(text)
+
+
+def flatten_plural_keys(text: str, platform: Platform) -> str:
+    """Collapse plural forms into the base keys used by the import tool.
+
+    The translation platform's importer only understands plain keys. Android
+    and web exports spell plurals as ``Key_other``; Telegram Desktop uses
+    ``Key#other``; Apple exports use ``Key_any``. For Chinese each plural has a
+    single form, so one value per base key is enough.
+    """
+    if platform.filename.endswith(".xml"):
+        flattened = _flatten_xml_plurals(text, platform)
+    else:
+        flattened = _flatten_strings_plurals(text, platform)
+    return _dedupe_import(flattened, platform)
 
 
 OPENING_QUOTES = {"「": "」", "『": "』"}
@@ -252,8 +486,10 @@ def _write_text(path: Path, text: str) -> None:
         file.write(text)
 
 
-def _require_files(directory: Path) -> None:
-    missing = [name for name in FINAL_FILENAMES if not (directory / name).is_file()]
+def _require_files(
+    directory: Path, names: tuple[str, ...] = FINAL_FILENAMES
+) -> None:
+    missing = [name for name in names if not (directory / name).is_file()]
     if missing:
         raise PipelineError(f"missing files in {directory}: {', '.join(missing)}")
 
@@ -346,9 +582,15 @@ def opencc_directory(source: Path, destination: Path, config: str | Path) -> Non
 def convert_directory(source: Path, destination: Path, rules: Rules) -> None:
     _require_files(source)
     destination.mkdir(parents=True, exist_ok=True)
-    for name in FINAL_FILENAMES:
-        text = apply_rules(_read_text(source / name), rules.replacements)
-        _write_text(destination / name, repair_quotes(text))
+    for platform in PLATFORMS:
+        text = repair_quotes(
+            apply_rules(_read_text(source / platform.filename), rules.replacements)
+        )
+        _write_text(destination / platform.filename, text)
+        _write_text(
+            destination / import_filename(platform.filename),
+            flatten_plural_keys(text, platform),
+        )
 
 
 def _restore_backup(backup: Path | None, output: Path) -> None:
@@ -358,13 +600,13 @@ def _restore_backup(backup: Path | None, output: Path) -> None:
 
 
 def publish_outputs(source: Path, output: Path) -> tuple[Path, ...]:
-    _require_files(source)
+    _require_files(source, RELEASE_FILENAMES)
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     prepared = Path(tempfile.mkdtemp(prefix=f".{output.name}-new-", dir=output.parent))
     backup: Path | None = None
     try:
-        for name in FINAL_FILENAMES:
+        for name in RELEASE_FILENAMES:
             shutil.copy2(source / name, prepared / name)
         if output.exists():
             backup = Path(
@@ -381,7 +623,7 @@ def publish_outputs(source: Path, output: Path) -> tuple[Path, ...]:
             shutil.rmtree(prepared)
         if backup is not None and backup.exists():
             shutil.rmtree(backup)
-    return tuple(output / name for name in FINAL_FILENAMES)
+    return tuple(output / name for name in RELEASE_FILENAMES)
 
 
 def sha256_file(path: Path) -> str:
@@ -393,13 +635,13 @@ def sha256_file(path: Path) -> str:
 
 
 def final_hashes(directory: Path) -> dict[str, str]:
-    _require_files(directory)
-    return {name: sha256_file(directory / name) for name in FINAL_FILENAMES}
+    _require_files(directory, RELEASE_FILENAMES)
+    return {name: sha256_file(directory / name) for name in RELEASE_FILENAMES}
 
 
 def default_tag() -> str:
     """Return today's release tag, matching the ``vYYYY.MM.DD`` scheme."""
-    return f"v{datetime.now(timezone.utc):%Y.%m.%d}"
+    return f"v{datetime.now(UTC):%Y.%m.%d}"
 
 
 def archive_name(tag: str) -> str:
@@ -409,11 +651,18 @@ def archive_name(tag: str) -> str:
     return f"{ARCHIVE_PREFIX}-{tag}.zip"
 
 
-def create_archive(directory: Path, tag: str | None = None) -> Path:
-    _require_files(directory)
-    archive = directory / archive_name(tag or default_tag())
+def import_archive_name(tag: str) -> str:
+    """Return the tagged import archive filename for ``tag``."""
+    if not TAG_PATTERN.fullmatch(tag):
+        raise PipelineError(f"invalid tag: {tag!r}")
+    return f"{ARCHIVE_PREFIX}-{tag}-import.zip"
+
+
+def _write_archive(
+    directory: Path, archive: Path, names: tuple[str, ...]
+) -> Path:
     with ZipFile(archive, "w") as output:
-        for name in FINAL_FILENAMES:
+        for name in names:
             info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = ZIP_DEFLATED
             info.external_attr = 0o644 << 16
@@ -426,9 +675,28 @@ def create_archive(directory: Path, tag: str | None = None) -> Path:
     return archive
 
 
-def write_checksums(directory: Path, archive: Path) -> Path:
+def create_archive(directory: Path, tag: str | None = None) -> Path:
+    _require_files(directory)
+    return _write_archive(
+        directory,
+        directory / archive_name(tag or default_tag()),
+        FINAL_FILENAMES,
+    )
+
+
+def create_import_archive(directory: Path, tag: str | None = None) -> Path:
+    _require_files(directory, IMPORT_FILENAMES)
+    return _write_archive(
+        directory,
+        directory / import_archive_name(tag or default_tag()),
+        IMPORT_FILENAMES,
+    )
+
+
+def write_checksums(directory: Path, *archives: Path) -> Path:
     checksums = final_hashes(directory)
-    checksums[archive.name] = sha256_file(archive)
+    for archive in archives:
+        checksums[archive.name] = sha256_file(archive)
     destination = directory / CHECKSUMS_NAME
     destination.write_text(
         "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items())),
@@ -456,10 +724,20 @@ def _build(root: Path, output: Path, rules: Rules, tag: str) -> BuildResult:
     opencc_directory(hant, gov, config)
     convert_directory(gov, staging, rules)
 
-    files = publish_outputs(staging, output)
+    published = publish_outputs(staging, output)
+    files = tuple(path for path in published if path.name in FINAL_FILENAMES)
+    import_files = tuple(path for path in published if path.name in IMPORT_FILENAMES)
     archive = create_archive(output, tag)
-    write_checksums(output, archive)
-    return BuildResult(output.resolve(), files, archive, t2gov_sha)
+    import_archive = create_import_archive(output, tag)
+    write_checksums(output, archive, import_archive)
+    return BuildResult(
+        output.resolve(),
+        files,
+        import_files,
+        archive,
+        import_archive,
+        t2gov_sha,
+    )
 
 
 def build(

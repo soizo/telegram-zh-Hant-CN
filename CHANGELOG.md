@@ -11,6 +11,14 @@
   `telegram-zh-Hant-CN.zip`). Local builds without `--tag` use today's
   `vYYYY.MM.DD` tag.
 
+### Added
+
+- The build also produces `*-import.*` files and an `-import.zip` for the
+  translation platform's importer. The normal files keep the plural suffixes
+  used by the apps; the import files collapse every plural key to its base key,
+  because the importer does not understand `Key_other`, `Key#other` or
+  `Key_any`.
+
 ### Fixed
 
 - The pack now calls itself `繁體中文(大陸)` in sentences such as

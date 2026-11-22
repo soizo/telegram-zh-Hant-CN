@@ -33,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     except PipelineError as error:
         parser.exit(1, f"error: {error}\n")
     print(
-        f"wrote {len(result.files)} files and {result.archive.name} "
+        f"wrote {len(result.files)} files, {len(result.import_files)} import files, "
+        f"{result.archive.name} and {result.import_archive.name} "
         f"to {result.output} (t2gov {result.t2gov_sha})"
     )
     return 0
