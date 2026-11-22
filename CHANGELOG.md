@@ -11,6 +11,12 @@
   `telegram-zh-Hant-CN.zip`). Local builds without `--tag` use today's
   `vYYYY.MM.DD` tag.
 
+### Fixed
+
+- The pack now calls itself `繁體中文(大陸)` in sentences such as
+  `使用繁體中文(大陸)繼續`. Only translation options that list other languages
+  say `簡體中文`.
+
 ## 1.0.0 — 2026-11-22
 
 Full rewrite around standard OpenCC conversion and a single user-maintained

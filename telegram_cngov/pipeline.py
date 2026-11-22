@@ -88,6 +88,7 @@ Rule = tuple[str, str]
 @dataclass(frozen=True)
 class Rules:
     labels: tuple[Rule, ...] = ()
+    inline: tuple[Rule, ...] = ()
     replacements: tuple[Rule, ...] = ()
 
 
@@ -126,6 +127,7 @@ def load_rules(path: Path) -> Rules:
         raise PipelineError(f"{path}: rules must be a YAML mapping")
     return Rules(
         labels=_pairs(data.get("labels"), "labels", path),
+        inline=_pairs(data.get("inline"), "inline", path),
         replacements=_pairs(data.get("replacements"), "replacements", path),
     )
 
@@ -138,14 +140,18 @@ FOREIGN_LABEL_KEY = re.compile(
 )
 
 
-def replace_labels(text: str, labels: tuple[Rule, ...]) -> str:
-    """Rename the pack, but only where a translation value is the label."""
+def replace_labels(
+    text: str, labels: tuple[Rule, ...], inline: tuple[Rule, ...] = ()
+) -> str:
+    """Rename the pack, including where it names itself inside a sentence."""
     lines: list[str] = []
     for line in text.splitlines(keepends=True):
         if FOREIGN_LABEL_KEY.match(line) is None:
             for old, new in labels:
                 line = line.replace(f'"{old}"', f'"{new}"')
                 line = line.replace(f">{old}<", f">{new}<")
+            for old, new in inline:
+                line = line.replace(old, new)
         lines.append(line)
     return "".join(lines)
 
@@ -252,13 +258,16 @@ def _require_files(directory: Path) -> None:
         raise PipelineError(f"missing files in {directory}: {', '.join(missing)}")
 
 
-def download_sources(destination: Path, labels: tuple[Rule, ...]) -> None:
+def download_sources(destination: Path, rules: Rules) -> None:
     destination.mkdir(parents=True, exist_ok=True)
 
     def fetch(platform: Platform) -> None:
         text = download_text(platform.url)
         validate_export(platform, text)
-        _write_text(destination / platform.filename, replace_labels(text, labels))
+        _write_text(
+            destination / platform.filename,
+            replace_labels(text, rules.labels, rules.inline),
+        )
 
     with ThreadPoolExecutor(max_workers=len(PLATFORMS)) as executor:
         tuple(executor.map(fetch, PLATFORMS))
@@ -441,7 +450,7 @@ def _build(root: Path, output: Path, rules: Rules, tag: str) -> BuildResult:
     gov = _prepare(root / "gov")
     staging = _prepare(root / "staging")
 
-    download_sources(source, rules.labels)
+    download_sources(source, rules)
     opencc_directory(source, hant, "s2t")
     config, t2gov_sha = download_t2gov(_prepare(root / "t2gov"))
     opencc_directory(hant, gov, config)

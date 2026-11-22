@@ -87,17 +87,32 @@ class DownloadTests(unittest.TestCase):
 
 
 class RuleTests(unittest.TestCase):
-    def test_labels_only_rewrite_whole_values(self) -> None:
+    def test_labels_and_inline_names_rewrite_the_pack(self) -> None:
         text = (
             '"LanguageName" = "简体中文";\n'
             '"Continue" = "使用简体中文继续";\n'
             '<string name="language_code">zh_hans</string>\n'
         )
         self.assertEqual(
-            replace_labels(text, RULES.labels),
+            replace_labels(text, RULES.labels, RULES.inline),
             '"LanguageName" = "繁体中文(大陆)";\n'
-            '"Continue" = "使用简体中文继续";\n'
+            '"Continue" = "使用繁体中文(大陆)继续";\n'
             '<string name="language_code">zh_hant_cn</string>\n',
+        )
+
+    def test_pack_name_inside_sentences_is_rewritten(self) -> None:
+        text = (
+            '<string name="language_continueInLanguagePopupText">'
+            "**Telegram X** 现已可更改语言为 **简体中文**。</string>\n"
+            '<string name="language_appliedLanguage">'
+            "Telegram 应用的语言已设置为简体中文。</string>\n"
+        )
+        self.assertEqual(
+            replace_labels(text, RULES.labels, RULES.inline),
+            '<string name="language_continueInLanguagePopupText">'
+            "**Telegram X** 现已可更改语言为 **繁体中文(大陆)**。</string>\n"
+            '<string name="language_appliedLanguage">'
+            "Telegram 应用的语言已设置为繁体中文(大陆)。</string>\n",
         )
 
     def test_labels_of_other_languages_are_kept(self) -> None:
@@ -105,7 +120,7 @@ class RuleTests(unittest.TestCase):
             '"Translate.Language.Chinese_Simplified" = "简体中文";\n'
             '<string name="Language.zh-CN">简体中文</string>\n'
         )
-        self.assertEqual(replace_labels(text, RULES.labels), text)
+        self.assertEqual(replace_labels(text, RULES.labels, RULES.inline), text)
 
     def test_corrections_are_applied_in_order(self) -> None:
         self.assertEqual(

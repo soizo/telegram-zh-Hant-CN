@@ -66,8 +66,10 @@ telegram-cngov --work-dir .work       # keep intermediate conversions
 do is left to OpenCC.
 
 - `labels` — whole translation values that name the language pack. Only a value
-  that is exactly the label is rewritten, so sentences that mention
-  "简体中文" are converted normally.
+  that is exactly the label is rewritten.
+- `inline` — names embedded in sentences that refer to this pack, such as
+  "使用简体中文继续". Lines that list translation options keep their own
+  language labels, so "简体中文" stays there.
 - `replacements` — ordered literal corrections applied after conversion.
   These cover mainland usage and upstream typos that the government standard
   does not handle.
