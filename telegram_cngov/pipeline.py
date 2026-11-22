@@ -30,7 +30,7 @@ T2GOV_REPOSITORY = (
     "OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards"
 )
 T2GOV_CONFIG = "t2gov.json"
-ARCHIVE_NAME = "telegram-zh-Hant-CN.zip"
+ARCHIVE_NAME = "telegram-zh-hant-cn.zip"
 CHECKSUMS_NAME = "SHA256SUMS"
 USER_AGENT = "telegram-cngov/0.1"
 

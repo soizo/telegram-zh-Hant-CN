@@ -6,6 +6,8 @@
 
 - The build workflow runs weekly and only publishes a release when the
   generated checksums differ from the latest release.
+- The release archive is named `telegram-zh-hant-cn.zip` (previously
+  `telegram-zh-Hant-CN.zip`).
 
 ## 1.0.0 — 2026-11-22
 
