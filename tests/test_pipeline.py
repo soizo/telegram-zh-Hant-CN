@@ -11,11 +11,11 @@ from urllib.error import URLError
 from zipfile import ZipFile
 
 from telegram_cngov.pipeline import (  # pyright: ignore[reportMissingImports]
-    ARCHIVE_NAME,
     FINAL_FILENAMES,
     PLATFORMS,
     PipelineError,
     apply_rules,
+    archive_name,
     create_archive,
     download_t2gov,
     download_text,
@@ -269,18 +269,29 @@ class OutputTests(unittest.TestCase):
             root = Path(directory)
             outputs = root / "outputs"
             self.populate(outputs)
-            first = create_archive(outputs)
+            first = create_archive(outputs, "v2026.11.22")
+            self.assertEqual(first.name, "telegram-zh-hant-cn-v2026.11.22.zip")
             original = first.read_bytes()
             first.unlink()
-            second = create_archive(outputs)
+            second = create_archive(outputs, "v2026.11.22")
             self.assertEqual(original, second.read_bytes())
 
             checksums = write_checksums(outputs, second)
             names = {
                 line.split("  ", 1)[1] for line in checksums.read_text().splitlines()
             }
-            self.assertEqual(names, set(FINAL_FILENAMES) | {ARCHIVE_NAME})
+            self.assertEqual(
+                names,
+                set(FINAL_FILENAMES) | {"telegram-zh-hant-cn-v2026.11.22.zip"},
+            )
             self.assertEqual(set(final_hashes(outputs)), set(FINAL_FILENAMES))
+
+    def test_archive_name_embeds_tag_and_rejects_unsafe_tags(self) -> None:
+        self.assertEqual(
+            archive_name("v2026.11.22"), "telegram-zh-hant-cn-v2026.11.22.zip"
+        )
+        with self.assertRaisesRegex(PipelineError, "invalid tag"):
+            archive_name("../escape")
 
 
 if __name__ == "__main__":

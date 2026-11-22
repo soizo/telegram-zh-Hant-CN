@@ -6,8 +6,10 @@
 
 - The build workflow runs weekly and only publishes a release when the
   generated checksums differ from the latest release.
-- The release archive is named `telegram-zh-hant-cn.zip` (previously
-  `telegram-zh-Hant-CN.zip`).
+- The release archive is named `telegram-zh-hant-cn-<tag>.zip`, where `<tag>`
+  is the release tag such as `v2026.11.22` (previously
+  `telegram-zh-Hant-CN.zip`). Local builds without `--tag` use today's
+  `vYYYY.MM.DD` tag.
 
 ## 1.0.0 — 2026-11-22
 

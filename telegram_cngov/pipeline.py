@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import sha256
 from http.client import HTTPException
 from io import BytesIO
@@ -30,8 +31,9 @@ T2GOV_REPOSITORY = (
     "OpenCC-Traditional-Chinese-characters-according-to-Chinese-government-standards"
 )
 T2GOV_CONFIG = "t2gov.json"
-ARCHIVE_NAME = "telegram-zh-hant-cn.zip"
+ARCHIVE_PREFIX = "telegram-zh-hant-cn"
 CHECKSUMS_NAME = "SHA256SUMS"
+TAG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 USER_AGENT = "telegram-cngov/0.1"
 
 
@@ -93,6 +95,7 @@ class Rules:
 class BuildResult:
     output: Path
     files: tuple[Path, ...]
+    archive: Path
     t2gov_sha: str
 
 
@@ -385,9 +388,21 @@ def final_hashes(directory: Path) -> dict[str, str]:
     return {name: sha256_file(directory / name) for name in FINAL_FILENAMES}
 
 
-def create_archive(directory: Path) -> Path:
+def default_tag() -> str:
+    """Return today's release tag, matching the ``vYYYY.MM.DD`` scheme."""
+    return f"v{datetime.now(timezone.utc):%Y.%m.%d}"
+
+
+def archive_name(tag: str) -> str:
+    """Return the tagged archive filename for ``tag``."""
+    if not TAG_PATTERN.fullmatch(tag):
+        raise PipelineError(f"invalid tag: {tag!r}")
+    return f"{ARCHIVE_PREFIX}-{tag}.zip"
+
+
+def create_archive(directory: Path, tag: str | None = None) -> Path:
     _require_files(directory)
-    archive = directory / ARCHIVE_NAME
+    archive = directory / archive_name(tag or default_tag())
     with ZipFile(archive, "w") as output:
         for name in FINAL_FILENAMES:
             info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
@@ -420,7 +435,7 @@ def _prepare(directory: Path) -> Path:
     return directory
 
 
-def _build(root: Path, output: Path, rules: Rules) -> BuildResult:
+def _build(root: Path, output: Path, rules: Rules, tag: str) -> BuildResult:
     source = _prepare(root / "source")
     hant = _prepare(root / "hant")
     gov = _prepare(root / "gov")
@@ -433,20 +448,23 @@ def _build(root: Path, output: Path, rules: Rules) -> BuildResult:
     convert_directory(gov, staging, rules)
 
     files = publish_outputs(staging, output)
-    write_checksums(output, create_archive(output))
-    return BuildResult(output.resolve(), files, t2gov_sha)
+    archive = create_archive(output, tag)
+    write_checksums(output, archive)
+    return BuildResult(output.resolve(), files, archive, t2gov_sha)
 
 
 def build(
     output: Path,
     *,
+    tag: str | None = None,
     work_dir: Path | None = None,
     rules: Path = Path("rules.yml"),
 ) -> BuildResult:
     """Run the whole conversion and publish the result to ``output``."""
     loaded = load_rules(rules)
+    selected_tag = tag or default_tag()
     if work_dir is not None:
         work_dir.mkdir(parents=True, exist_ok=True)
-        return _build(work_dir, output, loaded)
+        return _build(work_dir, output, loaded, selected_tag)
     with tempfile.TemporaryDirectory(prefix="telegram-cngov-") as temporary:
-        return _build(Path(temporary), output, loaded)
+        return _build(Path(temporary), output, loaded, selected_tag)
